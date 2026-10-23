@@ -43,3 +43,25 @@ class AcceptedDocument:
     parser: ParserKind
     status: DocumentStatus
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PageContent:
+    index: int
+    markdown: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentRecord:
+    id: UUID
+    filename: str
+    parser: ParserKind
+    status: DocumentStatus
+    created_at: datetime
+    updated_at: datetime
+    attempts: int
+    pages: tuple[PageContent, ...] | None = None
+    summary: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    completed_at: datetime | None = None
