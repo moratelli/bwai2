@@ -48,7 +48,17 @@ services:
     environment: *backend-environment
     restart: unless-stopped
     healthcheck:
-      disable: true
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os
+          from redis import Redis
+          assert Redis.from_url(os.environ["REDIS_URL"]).ping()
+      interval: 5s
+      timeout: 3s
+      retries: 10
     depends_on:
       redis:
         condition: service_healthy
