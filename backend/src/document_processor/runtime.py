@@ -1,8 +1,6 @@
 """Production dependency wiring for the API and worker processes."""
 
-from collections.abc import Awaitable
 from random import random
-from typing import Protocol
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
@@ -17,23 +15,23 @@ from document_processor.infrastructure.redis_gateway import RedisSubmissionGatew
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 from document_processor.infrastructure.redis_streams import RedisStreamQueue
 from document_processor.infrastructure.summarizers.gemini_summarizer import GeminiSummarizer
-from document_processor.ports import DocumentParser, ParserRegistry
+from document_processor.infrastructure.summarizers.smoke_test_summarizer import (
+    SmokeTestSummarizer,
+)
+from document_processor.ports import DocumentParser, DocumentSummarizer, ParserRegistry
 from document_processor.services.processing import ProcessingService
 from document_processor.worker import DocumentWorker
-
-
-class RedisPinger(Protocol):
-    def ping(self) -> Awaitable[bool]: ...
 
 
 class RedisHealthProbe:
     """Report whether the configured Redis server responds."""
 
-    def __init__(self, redis: RedisPinger) -> None:
+    def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
     async def ping(self) -> bool:
-        return await self._redis.ping()
+        result: object = await self._redis.ping()  # pyright: ignore[reportUnknownMemberType]
+        return bool(result)
 
 
 def create_redis(settings: Settings) -> Redis:
@@ -76,17 +74,27 @@ def build_worker(
     consumer_name: str,
 ) -> DocumentWorker:
     """Assemble one worker without connecting to providers at import time."""
-    if settings.gemini_api_key is None:
+    if settings.gemini_api_key is None and not settings.test_summarizer_enabled:
         raise RuntimeError("GEMINI_API_KEY is required by the document worker")
 
-    gemini_key = settings.gemini_api_key.get_secret_value()
     parsers: dict[ParserKind, DocumentParser] = {
         ParserKind.PYPDF: PyPdfParser(),
-        ParserKind.GEMINI: GeminiPdfParser(
+    }
+    summarizer: DocumentSummarizer
+    if settings.gemini_api_key is not None:
+        gemini_key = settings.gemini_api_key.get_secret_value()
+        parsers[ParserKind.GEMINI] = GeminiPdfParser(
             model=settings.gemini_model,
             api_key=gemini_key,
-        ),
-    }
+        )
+        summarizer = GeminiSummarizer(
+            model=settings.gemini_model,
+            chunk_size=settings.summary_chunk_characters,
+            api_key=gemini_key,
+        )
+    else:
+        summarizer = SmokeTestSummarizer()
+
     if settings.mistral_api_key is not None:
         parsers[ParserKind.MISTRAL] = MistralOcrParser(
             model=settings.mistral_ocr_model,
@@ -106,11 +114,7 @@ def build_worker(
     processor = ProcessingService(
         repository=repository,
         parsers=parser_registry,
-        summarizer=GeminiSummarizer(
-            model=settings.gemini_model,
-            chunk_size=settings.summary_chunk_characters,
-            api_key=gemini_key,
-        ),
+        summarizer=summarizer,
     )
     return DocumentWorker(
         queue=queue,

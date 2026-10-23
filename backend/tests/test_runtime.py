@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 
 from document_processor.config import Settings
 from document_processor.runtime import RedisHealthProbe, build_worker, create_runtime_app
+from document_processor.worker import DocumentWorker
 
 
 class FakeRedis:
@@ -63,6 +64,33 @@ def test_worker_requires_gemini_without_exposing_configuration() -> None:
         )
 
     assert "test-key" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_runtime_app_is_ready_with_explicit_smoke_summarizer() -> None:
+    app = create_runtime_app(
+        settings=Settings(test_summarizer_enabled=True),
+        redis=cast(Redis, FakeRedis()),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        readiness = await client.get("/health/ready")
+
+    assert readiness.status_code == 200
+    assert readiness.json()["checks"]["gemini"] == "test-only"
+
+
+def test_worker_uses_explicit_smoke_summarizer_without_gemini() -> None:
+    worker = build_worker(
+        settings=Settings(test_summarizer_enabled=True),
+        redis=cast(Redis, FakeRedis()),
+        consumer_name="worker-1",
+    )
+
+    assert isinstance(worker, DocumentWorker)
 
 
 def test_worker_concurrency_must_be_positive() -> None:

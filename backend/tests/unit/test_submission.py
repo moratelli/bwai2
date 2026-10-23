@@ -26,7 +26,7 @@ from document_processor.services.submission import SubmissionService
 
 @dataclass
 class RecordingGateway:
-    batches: list[tuple[NewDocument, ...]] = field(default_factory=list)
+    batches: list[tuple[NewDocument, ...]] = field(default_factory=lambda: [])
 
     async def create_batch(self, documents: Sequence[NewDocument]) -> None:
         self.batches.append(tuple(documents))
@@ -189,6 +189,18 @@ async def test_requires_gemini_for_every_submission() -> None:
         await service(gateway, app_settings=settings(gemini=False)).submit(
             [pdf()], ParserKind.PYPDF
         )
+
+
+@pytest.mark.asyncio
+async def test_allows_pypdf_with_explicit_smoke_summarizer() -> None:
+    gateway = RecordingGateway()
+    app_settings = Settings(test_summarizer_enabled=True)
+
+    accepted = await service(gateway, app_settings=app_settings).submit([pdf()], ParserKind.PYPDF)
+
+    assert len(accepted) == 1
+    with pytest.raises(ProviderUnavailableError, match="Gemini"):
+        await service(gateway, app_settings=app_settings).submit([pdf()], ParserKind.GEMINI)
 
 
 @pytest.mark.asyncio

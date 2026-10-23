@@ -171,12 +171,18 @@ def create_app(
             redis_available = await probe.ping()
         except Exception:
             redis_available = False
-        gemini_available = app_settings.gemini_available
+        summary_available = app_settings.summary_available
+        if app_settings.gemini_available:
+            gemini_status = "configured"
+        elif app_settings.test_summarizer_enabled:
+            gemini_status = "test-only"
+        else:
+            gemini_status = "missing"
         payload = ReadinessResponse(
-            status="ok" if redis_available and gemini_available else "unhealthy",
+            status="ok" if redis_available and summary_available else "unhealthy",
             checks={
                 "redis": "available" if redis_available else "unavailable",
-                "gemini": "configured" if gemini_available else "missing",
+                "gemini": gemini_status,
             },
         )
         if payload.status == "unhealthy":

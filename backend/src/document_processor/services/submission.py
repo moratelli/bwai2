@@ -74,7 +74,9 @@ class SubmissionService:
         )
 
     def _validate_availability(self, parser: ParserKind) -> None:
-        if not self._settings.gemini_available:
+        if not self._settings.summary_available:
+            raise ProviderUnavailableError("Gemini")
+        if parser is ParserKind.GEMINI and not self._settings.gemini_available:
             raise ProviderUnavailableError("Gemini")
         if parser is ParserKind.MISTRAL and not self._settings.mistral_available:
             raise ProviderUnavailableError("Mistral")

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     max_files_per_batch: int = Field(default=10, gt=0)
     max_file_size_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     summary_chunk_characters: int = Field(default=100_000, gt=0)
+    test_summarizer_enabled: bool = False
     stream_name: str = "documents:processing"
     consumer_group: str = "document-workers"
     worker_concurrency: int = Field(default=2, gt=0)
@@ -43,6 +44,11 @@ class Settings(BaseSettings):
     def gemini_available(self) -> bool:
         """Return whether summarization can be requested."""
         return self.gemini_api_key is not None
+
+    @property
+    def summary_available(self) -> bool:
+        """Return whether production or explicitly test-only summarization is available."""
+        return self.gemini_available or self.test_summarizer_enabled
 
     @property
     def mistral_available(self) -> bool:
