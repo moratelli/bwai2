@@ -49,7 +49,7 @@
 - [x] 8.1 Write health-aware backend and frontend Dockerfiles plus Nginx proxy configuration; verify both multi-stage images build without copying credentials, virtual environments, caches, or `node_modules`.
 - [x] 8.2 Add `compose.yaml` for Redis 7+, API, worker, and frontend with localhost binding, health checks, restart behavior, named Redis storage, and runtime-only provider variables; verify locally that each image runs against Colima and verify `docker compose config` in CI without embedding secret values.
 - [x] 8.3 Add a generated sample PDF and an end-to-end PyPDF smoke script with a test-only summarizer boundary; verify in CI that one Compose command starts the stack, the browser URL becomes healthy, upload returns HTTP 202, the worker consumes the stream, polling reaches a terminal result, and the stack shuts down cleanly.
-- [ ] 8.4 Rewrite the README as the reviewer guide covering setup, credentials, Compose, Make targets, architecture, Redis data flow, curl demo, frontend use, tests, limitations, and optional live-provider checks; execute every non-credential command shown in the guide.
+- [x] 8.4 Rewrite the README as the reviewer guide covering setup, credentials, Compose, Make targets, architecture, Redis data flow, curl demo, frontend use, tests, limitations, and optional live-provider checks; execute every non-credential command shown in the guide.
 
 ## 9. Add continuous integration and delivery
 
