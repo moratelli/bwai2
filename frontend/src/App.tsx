@@ -68,8 +68,8 @@ export function App({ client = defaultClient }: AppProps) {
   const visibleError = selectionError ?? uploadError;
 
   return (
-    <main>
-      <header>
+    <main className="app-shell">
+      <header className="hero">
         <p>PDF extraction and summarization</p>
         <h1>Async document processor</h1>
         <p>
@@ -78,12 +78,12 @@ export function App({ client = defaultClient }: AppProps) {
         </p>
       </header>
 
-      <form onSubmit={(event) => void submit(event)}>
-        <fieldset>
+      <form className="upload-panel" onSubmit={(event) => void submit(event)}>
+        <fieldset className="parser-fieldset">
           <legend>Choose how to read the PDFs</legend>
           <div className="parser-grid">
             {parserOptions.map((option) => (
-              <label key={option.value} htmlFor={`parser-${option.value}`}>
+              <label className="parser-card" key={option.value} htmlFor={`parser-${option.value}`}>
                 <input
                   checked={parser === option.value}
                   id={`parser-${option.value}`}
@@ -99,37 +99,44 @@ export function App({ client = defaultClient }: AppProps) {
           </div>
         </fieldset>
 
-        <label htmlFor="pdf-files">PDF files</label>
+        <label className="file-label" htmlFor="pdf-files">
+          PDF files
+        </label>
         <input
           accept="application/pdf,.pdf"
+          className="file-input"
           id="pdf-files"
           multiple
           onChange={onFilesSelected}
           type="file"
         />
-        <p>Maximum 10 files, 20 MiB each.</p>
+        <p className="field-help">Maximum 10 files, 20 MiB each.</p>
 
         {files.length > 0 && (
-          <ul aria-label="Selected files">
+          <ul aria-label="Selected files" className="selected-files">
             {files.map((file) => (
               <li key={`${file.name}-${file.size}`}>{file.name}</li>
             ))}
           </ul>
         )}
 
-        {visibleError !== null && <p role="alert">{visibleError}</p>}
-        <button disabled={submitting} type="submit">
+        {visibleError !== null && (
+          <p className="alert" role="alert">
+            {visibleError}
+          </p>
+        )}
+        <button className="primary-action" disabled={submitting} type="submit">
           {submitting ? "Submitting…" : "Process documents"}
         </button>
-        <p>
+        <p className="provider-note">
           Every completed document uses Gemini for its summary, including files extracted locally
           with PyPDF or parsed with Mistral OCR.
         </p>
       </form>
 
-      <section aria-labelledby="results-heading">
+      <section aria-labelledby="results-heading" className="results-section">
         <h2 id="results-heading">Results</h2>
-        <p aria-live="polite" role="status">
+        <p aria-live="polite" className="status-line" role="status">
           {statusMessage(documents, pollError)}
         </p>
         <div className="results-grid">
@@ -144,23 +151,31 @@ export function App({ client = defaultClient }: AppProps) {
 
 function DocumentCard({ document }: { document: TrackedDocument }) {
   return (
-    <article aria-labelledby={`document-${document.id}`}>
-      <header>
+    <article
+      aria-labelledby={`document-${document.id}`}
+      className="result-card"
+      data-status={document.status}
+    >
+      <header className="result-header">
         <h2 id={`document-${document.id}`}>{document.filename}</h2>
-        <p>{document.status}</p>
+        <p className="status-pill">{document.status}</p>
       </header>
 
       {document.status === "completed" && (
         <>
-          <section aria-labelledby={`summary-${document.id}`}>
+          <section aria-labelledby={`summary-${document.id}`} className="summary-block">
             <h3 id={`summary-${document.id}`}>Summary</h3>
-            <ReactMarkdown>{document.summary}</ReactMarkdown>
+            <div className="markdown-content">
+              <ReactMarkdown>{document.summary}</ReactMarkdown>
+            </div>
           </section>
-          <div>
+          <div className="page-list">
             {document.pages.map((page) => (
               <details key={page.index}>
                 <summary>Page {page.index + 1}</summary>
-                <ReactMarkdown>{page.markdown}</ReactMarkdown>
+                <div className="markdown-content">
+                  <ReactMarkdown>{page.markdown}</ReactMarkdown>
+                </div>
               </details>
             ))}
           </div>
@@ -168,7 +183,7 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
       )}
 
       {document.status === "failed" && (
-        <div>
+        <div className="failure-block">
           <p role="alert">{document.error.message}</p>
           {document.error.code === "empty_extraction" && (
             <p>
