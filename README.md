@@ -43,6 +43,14 @@ The default limits are ten files per batch and 20 MiB per file. The API rejects 
 
 FastAPI serves the interactive OpenAPI documentation at `http://localhost:8000/docs` during backend development.
 
+## Worker operations
+
+The worker reads `documents:processing` through the `document-workers` consumer group. It checks stale pending entries before blocking for new work, then takes a short-lived document lock so two workers cannot publish competing results.
+
+Temporary provider failures get up to three attempts with exponential backoff and jitter. A stream entry is acknowledged only after the document has a completed or failed record in Redis. If a worker is cancelled, it releases its lock and leaves unfinished work pending so another consumer can reclaim it.
+
+Worker logs carry structured fields such as `event`, `document_id`, `message_id`, `attempt`, `outcome`, and safe error codes. They deliberately omit PDF text, provider response bodies, exception messages, and credentials.
+
 ## Configuration
 
 Copy `.env.example` to `.env` for local container use, then add provider keys to the untracked file. Do not put credentials in source code, frontend variables, image build arguments, or commits.

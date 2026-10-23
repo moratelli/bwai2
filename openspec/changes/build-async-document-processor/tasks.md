@@ -30,7 +30,7 @@
 
 - [x] 5.1 Write failing processing-service tests for queued-to-processing-to-completed state, parser dispatch, one summary, atomic terminal publication, and source deletion; implement the processing use case until the focused tests pass.
 - [x] 5.2 Write failing worker tests for retryable backoff, three-attempt exhaustion, permanent failure, stale pending recovery, processing locks, terminal redelivery, acknowledgement order, and graceful cancellation; implement the consumer loop until the focused worker tests pass.
-- [ ] 5.3 Add structured, content-safe logging tests and worker operation notes; verify logs include document identifiers and state changes but omit PDF text, provider payloads, and credentials.
+- [x] 5.3 Add structured, content-safe logging tests and worker operation notes; verify logs include document identifiers and state changes but omit PDF text, provider payloads, and credentials.
 
 ## 6. Implement result and health APIs test-first
 

@@ -1,9 +1,11 @@
 """Redis Streams worker behavior tests."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -246,6 +248,46 @@ async def test_terminal_redelivery_is_acknowledged_without_retry() -> None:
 
     assert processor.attempts == [1]
     assert queue.events[-1] == "ack:1-0"
+
+
+@pytest.mark.asyncio
+async def test_emits_structured_content_safe_lifecycle_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    sensitive = "credential=super-secret raw-pdf-text"
+    queue = FakeQueue(new=(MESSAGE,))
+    processor = FakeProcessor(
+        [
+            RetryableProcessingError("provider_temporary", sensitive),
+            ProcessingOutcome.COMPLETED,
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger="document_processor.worker"):
+        await worker(queue, FakeRepository(), processor, sleep=no_sleep).run_once()
+
+    worker_records = [
+        record for record in caplog.records if record.name == "document_processor.worker"
+    ]
+    record_data = [cast(Mapping[str, object], vars(record)) for record in worker_records]
+    assert [data.get("event") for data in record_data] == [
+        "document_processing_started",
+        "document_retry_scheduled",
+        "document_processing_completed",
+    ]
+    assert all(data.get("document_id") == str(DOCUMENT_ID) for data in record_data)
+    assert record_data[1].get("attempt") == 1
+    assert record_data[1].get("error_code") == "provider_temporary"
+    rendered = " ".join(
+        record.getMessage() + repr(data)
+        for record, data in zip(worker_records, record_data, strict=True)
+    )
+    assert sensitive not in rendered
+    assert "super-secret" not in rendered
+    assert "raw-pdf-text" not in rendered
 
 
 @pytest.mark.asyncio

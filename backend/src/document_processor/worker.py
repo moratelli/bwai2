@@ -1,6 +1,7 @@
 """Redis Streams document worker orchestration."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
@@ -9,6 +10,8 @@ from uuid import UUID, uuid4
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class WorkerQueue(Protocol):
@@ -142,7 +145,24 @@ class DocumentWorker:
             ttl_seconds=self._lock_ttl_seconds,
         )
         if not acquired:
+            _LOGGER.info(
+                "document_lock_unavailable",
+                extra={
+                    "event": "document_lock_unavailable",
+                    "document_id": str(message.document_id),
+                    "message_id": message.message_id,
+                },
+            )
             return
+        _LOGGER.info(
+            "document_processing_started",
+            extra={
+                "event": "document_processing_started",
+                "document_id": str(message.document_id),
+                "message_id": message.message_id,
+                "attempt": max(message.delivery_count, 1),
+            },
+        )
         try:
             await self._process_with_retries(message)
         finally:
@@ -152,8 +172,11 @@ class DocumentWorker:
         attempt = min(max(message.delivery_count, 1), self._max_attempts)
         while True:
             try:
-                await self._processor.process(message.document_id, attempt=attempt)
-            except RetryableProcessingError:
+                outcome = await self._processor.process(
+                    message.document_id,
+                    attempt=attempt,
+                )
+            except RetryableProcessingError as error:
                 if attempt >= self._max_attempts:
                     await self._repository.fail(
                         message.document_id,
@@ -162,10 +185,31 @@ class DocumentWorker:
                         completed_at=self._clock(),
                         attempts=attempt,
                     )
+                    _LOGGER.error(
+                        "document_processing_failed",
+                        extra={
+                            "event": "document_processing_failed",
+                            "document_id": str(message.document_id),
+                            "message_id": message.message_id,
+                            "attempt": attempt,
+                            "error_code": "retry_exhausted",
+                        },
+                    )
                     await self._queue.acknowledge(message.message_id)
                     return
                 delay = self._retry_base_seconds * (2 ** (attempt - 1))
                 delay += self._random() * self._retry_jitter_seconds
+                _LOGGER.warning(
+                    "document_retry_scheduled",
+                    extra={
+                        "event": "document_retry_scheduled",
+                        "document_id": str(message.document_id),
+                        "message_id": message.message_id,
+                        "attempt": attempt,
+                        "error_code": error.code,
+                        "delay_seconds": delay,
+                    },
+                )
                 await self._sleep(delay)
                 attempt += 1
             except PermanentProcessingError as error:
@@ -176,8 +220,28 @@ class DocumentWorker:
                     completed_at=self._clock(),
                     attempts=attempt,
                 )
+                _LOGGER.warning(
+                    "document_processing_failed",
+                    extra={
+                        "event": "document_processing_failed",
+                        "document_id": str(message.document_id),
+                        "message_id": message.message_id,
+                        "attempt": attempt,
+                        "error_code": error.code,
+                    },
+                )
                 await self._queue.acknowledge(message.message_id)
                 return
             else:
+                _LOGGER.info(
+                    "document_processing_completed",
+                    extra={
+                        "event": "document_processing_completed",
+                        "document_id": str(message.document_id),
+                        "message_id": message.message_id,
+                        "attempt": attempt,
+                        "outcome": outcome.value,
+                    },
+                )
                 await self._queue.acknowledge(message.message_id)
                 return
