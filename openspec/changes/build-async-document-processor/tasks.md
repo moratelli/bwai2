@@ -24,7 +24,7 @@
 - [x] 4.2 Write failing Gemini adapter tests for inline PDF input, schema-valid ordered pages, malformed/duplicate page indexes, safe provider errors, and configurable `gemini-3.1-flash-lite`; implement async Gemini extraction behind the parser protocol with all SDK calls mocked.
 - [x] 4.3 Write failing Mistral adapter tests for base64 PDF input, `mistral-ocr-latest` page normalization, empty pages, and safe provider errors; implement the synchronous SDK boundary in a worker thread with all SDK calls mocked.
 - [x] 4.4 Write failing summarizer tests for single-request, page-boundary chunking, final synthesis, empty extraction, and safe retry classification; implement Gemini Markdown summarization until the focused tests pass.
-- [ ] 4.5 Document parser accuracy, OCR, latency, credential, and cost trade-offs plus PyPDF's scanned-page limitation; verify the README and UI copy use the same parser names and defaults.
+- [x] 4.5 Document parser accuracy, OCR, latency, credential, and cost trade-offs plus PyPDF's scanned-page limitation; verify the README and UI copy use the same parser names and defaults.
 
 ## 5. Implement the resilient worker test-first
 

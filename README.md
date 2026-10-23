@@ -8,13 +8,17 @@ Development happens on `dev`. The `main` branch remains the delivery target.
 
 `POST /api/v1/documents` accepts a multipart batch and responds with one queued document resource per file. Every file in a batch uses the same parser.
 
-The supported parser values are:
+The processing modes are:
 
-- `pypdf`: fast local text extraction for ordinary digital PDFs. This is the default mode in the web application.
-- `gemini`: AI-assisted extraction into Markdown.
-- `mistral`: OCR-oriented extraction for scanned or image-heavy PDFs.
+| Mode | API value | Use it for | Trade-offs |
+| --- | --- | --- | --- |
+| **Fast text / PyPDF** (default) | `pypdf` | Normal digital PDFs with selectable text | Fast and local, with no parser usage cost. It does not OCR scanned pages. The PDF stays local, but its extracted text is sent to Gemini for the final summary. |
+| **Rich Markdown / Gemini** | `gemini` | Complex layouts, tables, and richer Markdown | Sends the PDF to Google. Results can vary because extraction is generative, and the request adds provider latency and usage cost. Requires `GEMINI_API_KEY`. |
+| **Scanned document / OCR / Mistral** | `mistral` | Scans and image-heavy PDFs | Sends the PDF to Mistral for OCR, then sends the extracted text to Gemini for summarization. This path needs both provider keys and can add the most latency and cost. |
 
-Summaries always use Gemini, including documents parsed with PyPDF or Mistral. `GEMINI_API_KEY` is therefore required for all submissions. `MISTRAL_API_KEY` is needed only when `mistral` is selected.
+The application honors the selected mode and never switches providers silently. If Fast text finds no text, resubmit the document with Scanned document / OCR rather than expecting an automatic fallback.
+
+Every successful document receives one Gemini summary, regardless of the parser. `GEMINI_API_KEY` is therefore required for all submissions. `MISTRAL_API_KEY` is required only for the OCR mode. The configurable defaults are `gemini-3.1-flash-lite` and `mistral-ocr-latest`.
 
 Once the API is running locally, submit one file with:
 
