@@ -40,7 +40,7 @@
 
 ## 7. Build the focused React interface test-first
 
-- [ ] 7.1 Write failing Vitest tests for the typed API client and polling state machine, including accepted batches, independent terminal states, temporary poll failures, and cleanup; implement the client and polling hook until `npm test --prefix frontend` passes in run mode.
+- [x] 7.1 Write failing Vitest tests for the OpenAPI-typed API client and Jotai polling state machine, including accepted batches, independent terminal states, temporary poll failures, and cleanup; export FastAPI OpenAPI, generate TypeScript transport types, and implement the client and polling hook until `npm test --prefix frontend` passes in run mode.
 - [ ] 7.2 Write failing component tests for the default Fast text/PyPDF mode, intent-based parser labels and provider guidance, file validation, upload errors, status announcements, completed summaries/pages, independent failures, keyboard use, non-executable raw HTML, and the no-text OCR resubmission recommendation without automatic fallback; implement the single-page interface until the focused tests pass.
 - [ ] 7.3 Finish responsive styling, loading/empty/focus/error states, and concise UI copy; verify the production build and a keyboard-only manual pass at narrow and desktop widths.
 

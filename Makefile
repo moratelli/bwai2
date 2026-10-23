@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup format format-check lint typecheck test build check up down clean
+.PHONY: help setup generate-api check-api format format-check lint typecheck test build check up down clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -8,6 +8,21 @@ help: ## Show available commands
 setup: ## Install locked backend and frontend dependencies
 	uv sync --project backend --all-groups --locked
 	npm ci --prefix frontend
+
+generate-api: ## Export OpenAPI and generate frontend transport types
+	uv run --project backend python backend/scripts/export_openapi.py frontend/openapi.json
+	npm run generate:api --prefix frontend
+
+check-api: ## Verify generated API artifacts are current
+	@set -e; \
+		rm -rf .tmp/openapi-check; \
+		mkdir -p .tmp/openapi-check; \
+		trap 'rm -rf .tmp/openapi-check' EXIT; \
+		uv run --project backend python backend/scripts/export_openapi.py .tmp/openapi-check/openapi.json; \
+		frontend/node_modules/.bin/openapi-typescript .tmp/openapi-check/openapi.json -o .tmp/openapi-check/api.ts >/dev/null; \
+		frontend/node_modules/.bin/oxfmt .tmp/openapi-check/openapi.json .tmp/openapi-check/api.ts >/dev/null; \
+		cmp frontend/openapi.json .tmp/openapi-check/openapi.json; \
+		cmp frontend/src/generated/api.ts .tmp/openapi-check/api.ts
 
 format: ## Format Python and frontend files
 	uv run --project backend ruff format backend
@@ -33,7 +48,7 @@ build: ## Build backend package and frontend assets
 	uv build --project backend
 	npm run build --prefix frontend
 
-check: format-check lint typecheck test build ## Run every local quality gate
+check: check-api format-check lint typecheck test build ## Run every local quality gate
 
 up: ## Build and start the complete application
 	docker compose up --build
@@ -42,4 +57,4 @@ down: ## Stop the application and remove its containers
 	docker compose down --remove-orphans
 
 clean: ## Remove generated build and test artifacts
-	rm -rf backend/dist frontend/dist .pytest_cache backend/.pytest_cache .mypy_cache backend/.mypy_cache .ruff_cache backend/.ruff_cache htmlcov .coverage
+	rm -rf backend/dist frontend/dist .tmp .pytest_cache backend/.pytest_cache .mypy_cache backend/.mypy_cache .ruff_cache backend/.ruff_cache htmlcov .coverage

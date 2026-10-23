@@ -104,6 +104,8 @@ The initial endpoints will be:
 
 The upload response returns one opaque UUID per file. Status responses use a discriminated shape for `queued`, `processing`, `completed`, and `failed` so clients cannot confuse partial content with a terminal result. Unknown and expired identifiers return 404.
 
+FastAPI's generated OpenAPI document is the cross-language API authority. The repository exports that schema deterministically and uses `openapi-typescript` to generate the frontend's transport types. The frontend keeps runtime response validation at the network boundary because generated TypeScript types do not validate untrusted JSON at runtime.
+
 Server-Sent Events and WebSockets were rejected because polling is enough for multi-second background jobs and is easier to recover after refresh or temporary network loss.
 
 ### 8. Validate files in bounded reads and render generated content defensively
@@ -119,6 +121,8 @@ The browser uses a Markdown renderer with raw HTML disabled. Provider credential
 The Vite/React/SWC frontend will provide a responsive upload panel, intent-based processing mode cards, selected-file review, and one result card per document. Fast text (`pypdf`) is selected by default for normal digital PDFs; Rich Markdown (`gemini`) and Scanned document / OCR (`mistral`) expose their provider, credential, privacy, quality, and cost implications as secondary guidance. The selected API parser is always honored: the application will not silently fall back to another provider.
 
 It polls active documents with a bounded interval and backs off on temporary failures. Completed cards show the summary before collapsible page content; failed cards preserve other successful results. If PyPDF produces no text, the failure recommends resubmission with the OCR mode while keeping that choice with the user.
+
+Jotai atoms own tracked documents, active identifiers, and polling errors. The polling effect reads current atom values through the active Jotai store, while timers, abort controllers, and the latest API-client handle remain effect-local or imperative because they are lifecycle handles rather than application state.
 
 The interface will use semantic form controls, visible focus styles, an ARIA live status region, clear empty/loading/error states, and a restrained visual system. It will not add routing, accounts, automatic parser detection, or a component framework.
 
@@ -157,10 +161,10 @@ Rollback is a Git revert of the merge commit or redeployment of the previous GHC
 
 ## Architecture impact
 
-- **Affected boundary/invariant:** Introduces the API/worker boundary, Redis as queue and temporary system of record, provider adapter boundaries, and a same-origin web delivery boundary.
-- **Proposed impact:** All slow PDF and AI work runs in the worker; the API only validates, persists, enqueues, and retrieves. External SDKs stay behind typed adapters.
+- **Affected boundary/invariant:** Introduces the API/worker boundary, Redis as queue and temporary system of record, provider adapter boundaries, a generated OpenAPI-to-TypeScript contract boundary, Jotai-owned browser state, and a same-origin web delivery boundary.
+- **Proposed impact:** All slow PDF and AI work runs in the worker; the API only validates, persists, enqueues, and retrieves. External SDKs stay behind typed adapters. FastAPI OpenAPI owns transport shapes; generated TypeScript types and runtime validators protect the browser boundary, while Jotai owns browser application state.
 - **Spec authority:** Current specs are absent in the greenfield repository; proposed behavior is owned by `openspec/changes/build-async-document-processor/specs/`.
 - **Context authority:** Absent; bounded discovery found no `CONTEXT.md` or `CONTEXT-MAP.md`.
 - **ADR authority:** Absent; bounded discovery found no ADR directory, and the take-home does not need a separate durable decision record beyond this design.
 - **Architecture authority:** Absent; bounded discovery found no architecture map. This design is the proposed change-scoped authority until implementation and archive.
-- **Change status:** Approved by Pedro Moratelli on 2026-10-23 in this session. Approval covers continuous implementation, specification synchronization and archive, PR creation, and squash merge after all required gates pass.
+- **Change status:** Approved by Pedro Moratelli on 2026-10-23 in this session. Approval covers continuous implementation, specification synchronization and archive, PR creation, and squash merge after all required gates pass. Pedro approved generated OpenAPI frontend types and Jotai-owned browser state as an implementation-scope adjustment on 2026-10-23.
