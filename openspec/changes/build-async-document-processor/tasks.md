@@ -2,7 +2,7 @@
 
 ## 1. Establish the monorepo toolchain
 
-- [ ] 1.1 Create the Python 3.12 backend package, uv dependency groups, Ruff/mypy/pytest configuration, `.python-version`, and `uv.lock`; verify `uv sync --project backend --all-groups --locked` succeeds.
+- [x] 1.1 Create the Python 3.12 backend package, uv dependency groups, Ruff/mypy/pytest configuration, `.python-version`, and `uv.lock`; verify `uv sync --project backend --all-groups --locked` succeeds.
 - [ ] 1.2 Create the strict TypeScript React/Vite/SWC frontend with pinned Oxfmt, Oxlint, TypeScript, and Vitest scripts plus `package-lock.json`; verify `npm ci --prefix frontend` and the empty production build succeed.
 - [ ] 1.3 Add repository ignores, `.env.example`, and a root Makefile whose setup, format, lint, typecheck, test, build, check, up, down, and clean targets delegate to locked project commands; verify a dry run shows no global pip or npm dependency installation.
 

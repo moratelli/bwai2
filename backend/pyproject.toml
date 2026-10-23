@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "async-document-processor"
+version = "0.1.0"
+description = "Asynchronous PDF extraction and summarization service"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.118,<1",
+  "google-genai>=1.47,<2",
+  "httpx>=0.28,<1",
+  "mistralai>=1.9,<2",
+  "pydantic-settings>=2.11,<3",
+  "pypdf>=6.1,<7",
+  "python-multipart>=0.0.20,<1",
+  "redis>=6.4,<7",
+  "uvicorn[standard]>=0.37,<1",
+]
+
+[dependency-groups]
+dev = [
+  "fakeredis>=2.32,<3",
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.2,<2",
+  "pytest-cov>=7,<8",
+  "reportlab>=4.4,<5",
+  "ruff>=0.14,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/document_processor"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["document_processor"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["document_processor"]
+
+[[tool.mypy.overrides]]
+module = ["fakeredis.*", "mistralai.*", "pypdf.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
