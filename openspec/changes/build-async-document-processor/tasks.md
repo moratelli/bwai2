@@ -59,7 +59,7 @@
 ## 10. Run integrated quality gates
 
 - [x] 10.1 Run `make check` from a clean dependency state and fix all Ruff format/check, mypy, pytest, Oxfmt, Oxlint, TypeScript, Vitest, and frontend build failures.
-- [ ] 10.2 Build and smoke-test the individual Redis, API, worker, and frontend containers locally with Colima; run the complete Compose health and PyPDF end-to-end smoke checks in CI, inspect logs for secret/content leakage, and verify clean shutdown.
+- [x] 10.2 Build and smoke-test the individual Redis, API, worker, and frontend containers locally with Colima; run the complete Compose health and PyPDF end-to-end smoke checks in CI, inspect logs for secret/content leakage, and verify clean shutdown.
 - [ ] 10.3 If local Gemini and Mistral credentials are available, run one opt-in sample through each external parser without recording keys or provider payloads; otherwise record both checks as not run rather than weakening mocked coverage.
 - [ ] 10.4 Create the source archive from tracked files, excluding `.git`, `.venv`, `node_modules`, caches, local environment files, and generated build output; inspect the archive listing and verify it expands into a runnable repository.
 
