@@ -58,3 +58,23 @@ class InfrastructureUnavailableError(DocumentProcessorError):
 
     def __init__(self, resource: str) -> None:
         super().__init__(f"{resource} is temporarily unavailable.")
+
+
+class ProcessingError(DocumentProcessorError):
+    """Base class for safe worker-facing failures."""
+
+
+class PermanentProcessingError(ProcessingError):
+    """A document or response failure that must not be retried."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class RetryableProcessingError(ProcessingError):
+    """A temporary provider or infrastructure failure."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
