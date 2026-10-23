@@ -49,6 +49,8 @@ skip_covered = true
 
 [tool.mypy]
 python_version = "3.12"
+python_executable = ".venv/bin/python"
+mypy_path = "src"
 strict = true
 packages = ["document_processor"]
 

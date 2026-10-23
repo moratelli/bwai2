@@ -8,7 +8,7 @@
 
 ## 2. Implement document submission test-first
 
-- [ ] 2.1 Write failing domain and service tests for document states, parser identifiers, batch limits, byte limits, media type, PDF signature, provider availability, and atomic acceptance; implement typed models, configuration, protocols, and the submission service until `uv run --project backend pytest backend/tests/unit/test_submission.py` passes.
+- [x] 2.1 Write failing domain and service tests for document states, parser identifiers, batch limits, byte limits, media type, PDF signature, provider availability, and atomic acceptance; implement typed models, configuration, protocols, and the submission service until `uv run --project backend pytest backend/tests/unit/test_submission.py` passes.
 - [ ] 2.2 Write failing ASGI tests for `POST /api/v1/documents`, including multi-file HTTP 202 responses and 413/422/503 error contracts; implement the FastAPI app, dependency wiring, schemas, safe error envelope, and thin upload route until the focused API tests pass.
 - [ ] 2.3 Add submission API examples and limit/configuration notes to the README while the contract is fresh; verify each documented curl field and parser value matches the OpenAPI schema.
 
