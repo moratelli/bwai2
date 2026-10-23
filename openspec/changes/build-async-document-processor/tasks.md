@@ -53,7 +53,7 @@
 
 ## 9. Add continuous integration and delivery
 
-- [ ] 9.1 Add GitHub Actions CI for uv-locked Python checks, npm-locked frontend checks, and Compose image validation on pull requests to `main` and pushes to `dev` or `main`; verify workflow syntax and local commands match `make check`.
+- [x] 9.1 Add GitHub Actions CI for uv-locked Python checks, npm-locked frontend checks, and Compose image validation on pull requests to `main` and pushes to `dev` or `main`; verify workflow syntax and local commands match `make check`.
 - [ ] 9.2 Add a least-privilege GHCR delivery workflow for successful `main` updates that publishes commit-tagged backend and frontend images but never publishes from pull requests; verify permissions, tags, cache configuration, and secret-free build inputs by inspection and workflow validation.
 
 ## 10. Run integrated quality gates
