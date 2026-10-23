@@ -25,8 +25,10 @@ class Settings(BaseSettings):
 
     @property
     def gemini_available(self) -> bool:
+        """Return whether summarization can be requested."""
         return self.gemini_api_key is not None
 
     @property
     def mistral_available(self) -> bool:
+        """Return whether the optional OCR mode can be requested."""
         return self.mistral_api_key is not None

@@ -51,3 +51,10 @@ class ProviderUnavailableError(SubmissionError):
 
     def __init__(self, provider: str) -> None:
         super().__init__(f"{provider} is not configured for this processing mode.")
+
+
+class InfrastructureUnavailableError(DocumentProcessorError):
+    code = "infrastructure_unavailable"
+
+    def __init__(self, resource: str) -> None:
+        super().__init__(f"{resource} is temporarily unavailable.")

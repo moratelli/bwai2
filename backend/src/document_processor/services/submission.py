@@ -25,6 +25,8 @@ from document_processor.ports import SubmissionGateway
 
 
 class SubmissionService:
+    """Validate complete batches before publishing any document job."""
+
     def __init__(
         self,
         *,
