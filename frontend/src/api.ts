@@ -16,6 +16,14 @@ export interface DocumentReader {
   getDocument(id: string, signal?: AbortSignal): Promise<DocumentResource>;
 }
 
+export interface DocumentClient extends DocumentReader {
+  submitDocuments(
+    files: readonly File[],
+    parser: ParserKind,
+    signal?: AbortSignal,
+  ): Promise<AcceptedDocument[]>;
+}
+
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export class ApiError extends Error {
