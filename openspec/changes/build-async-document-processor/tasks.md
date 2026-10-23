@@ -63,7 +63,7 @@
 - [x] 10.3 If local Gemini and Mistral credentials are available, run one opt-in sample through each external parser without recording keys or provider payloads; otherwise record both checks as not run rather than weakening mocked coverage.
   - Gemini live check: not run; `GEMINI_API_KEY` was unavailable.
   - Mistral live check: not run; `MISTRAL_API_KEY` was unavailable.
-- [ ] 10.4 Create the source archive from tracked files, excluding `.git`, `.venv`, `node_modules`, caches, local environment files, and generated build output; inspect the archive listing and verify it expands into a runnable repository.
+- [x] 10.4 Create the source archive from tracked files, excluding `.git`, `.venv`, `node_modules`, caches, local environment files, and generated build output; inspect the archive listing and verify it expands into a runnable repository.
 
 ## Workflow follow-up
 
