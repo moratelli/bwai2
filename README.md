@@ -146,6 +146,15 @@ make smoke
 
 That target starts Compose with the explicit test summarizer, generates a PDF, uploads it through Nginx, waits for the worker result, checks page text and summary output, and removes the stack and Redis volume afterward.
 
+## Published images
+
+After CI succeeds for a push to `main`, the CD workflow publishes two images:
+
+- `ghcr.io/moratelli/bwai2-backend`
+- `ghcr.io/moratelli/bwai2-frontend`
+
+Each image gets `sha-<full-commit-sha>` and `latest` tags. Pull requests and `dev` pushes never publish packages. The workflow checks out the exact revision that passed CI before building either image.
+
 ## Live provider checks
 
 The automated suite uses fakes at provider boundaries. To exercise Gemini, put a real `GEMINI_API_KEY` in `.env`, keep `TEST_SUMMARIZER_ENABLED=false`, start the stack, and submit a PDF in the UI. Add `MISTRAL_API_KEY` before testing OCR.
