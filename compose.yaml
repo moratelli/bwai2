@@ -1,0 +1,62 @@
+name: bwai2
+
+x-backend-environment: &backend-environment
+  REDIS_URL: redis://redis:6379/0
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+  MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+  MISTRAL_OCR_MODEL: ${MISTRAL_OCR_MODEL:-mistral-ocr-latest}
+  DOCUMENT_TTL_SECONDS: ${DOCUMENT_TTL_SECONDS:-86400}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  api:
+    build:
+      context: ./backend
+    environment: *backend-environment
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "document_processor.worker_main"]
+    environment: *backend-environment
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  redis-data:

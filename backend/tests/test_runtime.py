@@ -1,0 +1,70 @@
+from typing import cast
+from uuid import uuid4
+
+import httpx
+import pytest
+from pydantic import SecretStr, ValidationError
+from redis.asyncio import Redis
+
+from document_processor.config import Settings
+from document_processor.runtime import RedisHealthProbe, build_worker, create_runtime_app
+
+
+class FakeRedis:
+    async def ping(self) -> bool:
+        return True
+
+    async def hgetall(self, _name: str) -> dict[str, str]:
+        return {}
+
+
+@pytest.mark.asyncio
+async def test_runtime_app_uses_redis_dependencies() -> None:
+    redis = cast(Redis, FakeRedis())
+    app = create_runtime_app(
+        settings=Settings(gemini_api_key=SecretStr("test-key")),
+        redis=redis,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        readiness = await client.get("/health/ready")
+        missing = await client.get(f"/api/v1/documents/{uuid4()}")
+
+    assert readiness.status_code == 200
+    assert readiness.json() == {
+        "status": "ok",
+        "checks": {"redis": "available", "gemini": "configured"},
+    }
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "error": {
+            "code": "document_not_found",
+            "message": "Document not found or expired.",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_redis_health_probe_reports_connectivity() -> None:
+    probe = RedisHealthProbe(cast(Redis, FakeRedis()))
+
+    assert await probe.ping() is True
+
+
+def test_worker_requires_gemini_without_exposing_configuration() -> None:
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY is required") as error:
+        build_worker(
+            settings=Settings(),
+            redis=cast(Redis, FakeRedis()),
+            consumer_name="worker-1",
+        )
+
+    assert "test-key" not in str(error.value)
+
+
+def test_worker_concurrency_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(worker_concurrency=0)
