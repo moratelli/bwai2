@@ -16,7 +16,7 @@
 
 - [x] 3.1 Write failing repository tests for queued metadata, source bytes, 24-hour expiry, status reads, atomic completed/failed writes, raw-source deletion, and lock ownership; implement the async Redis document repository until the focused tests pass.
 - [x] 3.2 Write failing queue tests for transactional batch publication, consumer-group creation, new reads, acknowledgement, pending-entry reclaim, and terminal redelivery; implement Redis Streams operations until the focused tests pass.
-- [ ] 3.3 Add a Redis-backed integration test that submits a batch and observes stream entries and retrievable queued documents; verify it passes against Redis 7 without external provider calls.
+- [x] 3.3 Add a Redis-backed integration test that submits a batch and observes stream entries and retrievable queued documents; verify it passes against Redis 7 without external provider calls.
 
 ## 4. Implement parsers and summarization test-first
 
