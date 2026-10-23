@@ -60,6 +60,13 @@ class InfrastructureUnavailableError(DocumentProcessorError):
         super().__init__(f"{resource} is temporarily unavailable.")
 
 
+class DocumentNotFoundError(DocumentProcessorError):
+    code = "document_not_found"
+
+    def __init__(self) -> None:
+        super().__init__("Document not found or expired.")
+
+
 class ProcessingError(DocumentProcessorError):
     """Base class for safe worker-facing failures."""
 

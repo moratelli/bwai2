@@ -34,7 +34,7 @@
 
 ## 6. Implement result and health APIs test-first
 
-- [ ] 6.1 Write failing ASGI tests for queued, processing, completed, failed, unknown, and expired `GET /api/v1/documents/{document_id}` responses; implement discriminated response models and the result route until the focused tests pass.
+- [x] 6.1 Write failing ASGI tests for queued, processing, completed, failed, unknown, and expired `GET /api/v1/documents/{document_id}` responses; implement discriminated response models and the result route until the focused tests pass.
 - [ ] 6.2 Write failing liveness/readiness tests for healthy Redis, unavailable Redis, and missing Gemini configuration; implement `/health/live` and `/health/ready` until the focused tests pass without exposing secret values.
 - [ ] 6.3 Regenerate and inspect the OpenAPI document; verify upload, status, terminal result, health, and safe error schemas match the capability specs.
 

@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import FastAPI, File, Form, UploadFile, status
 from fastapi.exceptions import RequestValidationError
@@ -10,11 +11,14 @@ from fastapi.responses import JSONResponse
 from document_processor.api.schemas import (
     AcceptedDocumentResponse,
     BatchAcceptedResponse,
+    DocumentResponse,
     ErrorDetail,
     ErrorResponse,
+    document_response,
 )
 from document_processor.config import Settings
 from document_processor.domain.errors import (
+    DocumentNotFoundError,
     DocumentProcessorError,
     FileTooLargeError,
     InfrastructureUnavailableError,
@@ -22,8 +26,13 @@ from document_processor.domain.errors import (
     SubmissionError,
     TooManyFilesError,
 )
-from document_processor.domain.models import NewDocument, ParserKind, UploadCandidate
-from document_processor.ports import SubmissionGateway
+from document_processor.domain.models import (
+    DocumentRecord,
+    NewDocument,
+    ParserKind,
+    UploadCandidate,
+)
+from document_processor.ports import DocumentReader, SubmissionGateway
 from document_processor.services.submission import SubmissionService
 
 READ_CHUNK_BYTES = 64 * 1024
@@ -35,6 +44,12 @@ class UnconfiguredSubmissionGateway:
         raise InfrastructureUnavailableError("Document queue")
 
 
+class UnconfiguredDocumentReader:
+    async def get(self, document_id: UUID) -> DocumentRecord | None:
+        del document_id
+        raise InfrastructureUnavailableError("Document store")
+
+
 def _error_response(status_code: int, error: DocumentProcessorError) -> JSONResponse:
     payload = ErrorResponse(error=ErrorDetail(code=error.code, message=str(error)))
     return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
@@ -44,9 +59,11 @@ def create_app(
     *,
     settings: Settings | None = None,
     submission_gateway: SubmissionGateway | None = None,
+    document_reader: DocumentReader | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
     gateway = submission_gateway or UnconfiguredSubmissionGateway()
+    reader = document_reader or UnconfiguredDocumentReader()
     service = SubmissionService(gateway=gateway, settings=app_settings)
 
     app = FastAPI(
@@ -75,6 +92,8 @@ def create_app(
         _request: object,
         error: DocumentProcessorError,
     ) -> JSONResponse:
+        if isinstance(error, DocumentNotFoundError):
+            return _error_response(status.HTTP_404_NOT_FOUND, error)
         if isinstance(error, (TooManyFilesError, FileTooLargeError)):
             return _error_response(status.HTTP_413_CONTENT_TOO_LARGE, error)
         if isinstance(error, (ProviderUnavailableError, InfrastructureUnavailableError)):
@@ -128,6 +147,20 @@ def create_app(
                 for document in accepted
             ]
         )
+
+    @app.get(
+        "/api/v1/documents/{document_id}",
+        response_model=DocumentResponse,
+        responses={
+            404: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def get_document(document_id: UUID) -> DocumentResponse:
+        document = await reader.get(document_id)
+        if document is None:
+            raise DocumentNotFoundError
+        return document_response(document)
 
     return app
 
