@@ -19,6 +19,10 @@ class SubmissionGateway(Protocol):
         ...
 
 
+class HealthProbe(Protocol):
+    async def ping(self) -> bool: ...
+
+
 class DocumentReader(Protocol):
     async def get(self, document_id: UUID) -> DocumentRecord | None: ...
 

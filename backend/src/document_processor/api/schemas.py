@@ -42,6 +42,19 @@ class BatchAcceptedResponse(BaseModel):
     documents: list[AcceptedDocumentResponse]
 
 
+class LivenessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok"]
+
+
+class ReadinessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "unhealthy"]
+    checks: dict[str, str]
+
+
 class DocumentStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -14,6 +14,8 @@ from document_processor.api.schemas import (
     DocumentResponse,
     ErrorDetail,
     ErrorResponse,
+    LivenessResponse,
+    ReadinessResponse,
     document_response,
 )
 from document_processor.config import Settings
@@ -32,7 +34,7 @@ from document_processor.domain.models import (
     ParserKind,
     UploadCandidate,
 )
-from document_processor.ports import DocumentReader, SubmissionGateway
+from document_processor.ports import DocumentReader, HealthProbe, SubmissionGateway
 from document_processor.services.submission import SubmissionService
 
 READ_CHUNK_BYTES = 64 * 1024
@@ -50,6 +52,11 @@ class UnconfiguredDocumentReader:
         raise InfrastructureUnavailableError("Document store")
 
 
+class UnconfiguredHealthProbe:
+    async def ping(self) -> bool:
+        return False
+
+
 def _error_response(status_code: int, error: DocumentProcessorError) -> JSONResponse:
     payload = ErrorResponse(error=ErrorDetail(code=error.code, message=str(error)))
     return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
@@ -60,10 +67,12 @@ def create_app(
     settings: Settings | None = None,
     submission_gateway: SubmissionGateway | None = None,
     document_reader: DocumentReader | None = None,
+    health_probe: HealthProbe | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
     gateway = submission_gateway or UnconfiguredSubmissionGateway()
     reader = document_reader or UnconfiguredDocumentReader()
+    probe = health_probe or UnconfiguredHealthProbe()
     service = SubmissionService(gateway=gateway, settings=app_settings)
 
     app = FastAPI(
@@ -147,6 +156,35 @@ def create_app(
                 for document in accepted
             ]
         )
+
+    @app.get("/health/live", response_model=LivenessResponse)
+    async def liveness() -> LivenessResponse:
+        return LivenessResponse(status="ok")
+
+    @app.get(
+        "/health/ready",
+        response_model=ReadinessResponse,
+        responses={503: {"model": ReadinessResponse}},
+    )
+    async def readiness() -> ReadinessResponse | JSONResponse:
+        try:
+            redis_available = await probe.ping()
+        except Exception:
+            redis_available = False
+        gemini_available = app_settings.gemini_available
+        payload = ReadinessResponse(
+            status="ok" if redis_available and gemini_available else "unhealthy",
+            checks={
+                "redis": "available" if redis_available else "unavailable",
+                "gemini": "configured" if gemini_available else "missing",
+            },
+        )
+        if payload.status == "unhealthy":
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=payload.model_dump(mode="json"),
+            )
+        return payload
 
     @app.get(
         "/api/v1/documents/{document_id}",
