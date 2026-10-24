@@ -1,0 +1,26 @@
+meta {
+  name: Readiness
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/health/ready
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("Redis and summary configuration are ready", () => {
+    expect(res.getStatus()).to.equal(200);
+    const body = res.getBody();
+    expect(body.status).to.equal("ok");
+    expect(body.checks.redis).to.equal("available");
+    expect(["configured", "test-only"].includes(body.checks.gemini)).to.equal(true);
+  });
+}
+
+docs {
+  configured means a Gemini key is present, not that it has been verified.
+  test-only identifies the explicit fake summarizer used by credential-free checks.
+}

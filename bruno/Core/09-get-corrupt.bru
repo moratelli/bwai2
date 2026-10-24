@@ -1,0 +1,35 @@
+meta {
+  name: Get failed worker result
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/api/v1/documents/{{corruptDocumentId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("Returns the submitted document", () => {
+    expect(res.getStatus()).to.equal(200);
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("corruptDocumentId") || bru.getEnvVar("corruptDocumentId"));
+    expect(body.parser).to.equal("pypdf");
+  });
+
+  test("Is pending or reaches the expected failed result", () => {
+    const body = res.getBody();
+    expect(["queued", "processing", "failed"].includes(body.status)).to.equal(true);
+    if (body.status === "failed") {
+      expect(body.error.code).to.equal("invalid_pdf");
+      expect(body.error.message.length > 0).to.equal(true);
+    }
+  });
+}
+
+docs {
+  Send the matching POST first, then repeat this GET until status is failed.
+  A passing test while queued or processing only validates the in-flight response.
+  HTTP 200 means the record was retrieved, not that processing succeeded.
+}

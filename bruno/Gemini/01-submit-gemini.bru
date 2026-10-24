@@ -1,0 +1,46 @@
+meta {
+  name: Submit Gemini
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/documents
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  parser: gemini
+  files: @file(./fixtures/sample.pdf) @contentType(application/pdf)
+}
+
+script:pre-request {
+  bru.deleteVar("geminiDocumentId");
+}
+
+script:post-response {
+  if (res.getStatus() === 202) {
+    const documents = res.getBody().documents;
+    bru.setVar("geminiDocumentId", documents[0].id);
+  }
+}
+
+tests {
+  test("Accepts 1 document(s) without waiting for processing", () => {
+    expect(res.getStatus()).to.equal(202);
+    const documents = res.getBody().documents;
+    expect(documents.length).to.equal(1);
+    expect(new Set(documents.map((document) => document.id)).size).to.equal(1);
+    documents.forEach((document) => {
+      expect(document.parser).to.equal("gemini");
+      expect(document.status).to.equal("queued");
+      expect(typeof document.id).to.equal("string");
+    });
+  });
+}
+
+docs {
+  Follow with the matching GET request until status is completed.
+  202 means accepted, not finished. IDs are runtime variables, not saved environment values.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Unknown document
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/api/v1/documents/00000000-0000-4000-8000-000000000000
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("Returns 404 document_not_found", () => {
+    expect(res.getStatus()).to.equal(404);
+    const error = res.getBody().error;
+    expect(error.code).to.equal("document_not_found");
+    expect(typeof error.message).to.equal("string");
+    expect(error.message.length > 0).to.equal(true);
+  });
+}

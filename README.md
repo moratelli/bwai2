@@ -60,6 +60,12 @@ curl --fail-with-body \
 
 Repeat the `files` form field to submit several PDFs in one batch. The API validates the whole batch before it writes any job.
 
+## Test the API with Bruno
+
+Open the checked-in `bruno/` folder as a collection. It includes local environments, synthetic PDF fixtures, response assertions, and automatic document-ID capture for PyPDF, batch, worker-failure, validation, and live Gemini requests.
+
+Follow the [Bruno runbook](bruno/README.md). Select **Local** for port `8080` or **Manual** for an isolated stack on port `18080`. Keep Gemini credentials in the server's `.env`, not in Bruno.
+
 ## API surface
 
 | Method | Path | Purpose |
