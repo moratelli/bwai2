@@ -86,11 +86,21 @@ jobs:
 
       - name: Build and start the stack
         env:
+          GEMINI_API_KEY: ""
           TEST_SUMMARIZER_ENABLED: "true"
         run: docker compose up --build --detach --wait --wait-timeout 240
 
       - name: Run end-to-end smoke test
         run: ./scripts/smoke_test.sh
+
+      - name: Check concurrent API requests
+        run: |
+          docker compose cp scripts/generate_sample_pdf.py \
+            api:/app/generate_sample_pdf.py
+          docker compose cp scripts/concurrency_smoke_test.py \
+            api:/app/concurrency_smoke_test.py
+          docker compose exec -T --env APP_URL=http://127.0.0.1:8000 \
+            api python /app/concurrency_smoke_test.py
 
       - name: Run browser end-to-end test
         run: |

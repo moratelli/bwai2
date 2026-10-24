@@ -158,7 +158,15 @@ Run the complete credential-free container path with:
 make smoke
 ```
 
-That target starts Compose with the explicit test summarizer, generates a PDF, uploads it through Nginx, waits for the worker result, checks page text and summary output, and removes the stack and Redis volume afterward.
+That target starts Compose with an empty Gemini key and the explicit test summarizer. It first uploads a generated PDF through Nginx and checks the worker result. It then runs `scripts/concurrency_smoke_test.py` against FastAPI directly inside the API container:
+
+- Open ten upload connections together and hold them in flight while checking liveness, readiness, and a document lookup.
+- Release the uploads and require ten HTTP `202` responses with distinct document IDs.
+- Poll for nine completed documents and one expected corrupt-PDF failure. Check each successful document's filename, page text, and summary against its unique fixture.
+
+The concurrency check requires test-only summarization before submitting any PDFs, uses five-second HTTP timeouts, and allows sixty seconds for the synthetic jobs to finish. Ten clients are a chosen acceptance test, not a stated assignment limit or a production capacity claim. The test does not add submission deduplication or exercise crashes and network outages. CI runs it as a required step.
+
+`make smoke` removes the selected stack and Redis volume afterward; it does not edit your `.env`.
 
 Run the same workflow through Chromium with:
 
