@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate-api check-api format format-check lint typecheck test build check up down logs smoke clean
+.PHONY: help setup generate-api check-api format format-check lint typecheck test build check up down logs smoke browser-e2e live-providers clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -39,6 +39,7 @@ lint: ## Run backend and frontend linters
 typecheck: ## Run strict backend and frontend type checks
 	uv run --project backend mypy backend/src backend/tests
 	npm run typecheck --prefix frontend
+	npm run typecheck:e2e --prefix frontend
 
 test: ## Run backend and frontend tests once
 	uv run --project backend pytest backend/tests
@@ -64,6 +65,24 @@ smoke: ## Run the credential-free Compose smoke test
 		trap 'docker compose down --volumes --remove-orphans' EXIT; \
 		TEST_SUMMARIZER_ENABLED=true docker compose up --build --detach --wait; \
 		./scripts/smoke_test.sh
+
+browser-e2e: ## Run the browser workflow against the credential-free stack
+	@set -e; \
+		trap 'docker compose down --volumes --remove-orphans' EXIT; \
+		frontend/node_modules/.bin/playwright install chromium; \
+		TEST_SUMMARIZER_ENABLED=true docker compose up --build --detach --wait; \
+		python3 scripts/generate_sample_pdf.py .tmp/playwright/sample.pdf >/dev/null; \
+		npm run test:e2e --prefix frontend
+
+live-providers: ## Exercise live Gemini extraction/summary and Mistral OCR
+	@set -e; \
+		if [ ! -f .env ]; then \
+			echo "Create an untracked .env with both provider keys first" >&2; \
+			exit 1; \
+		fi; \
+		trap 'docker compose down --volumes --remove-orphans' EXIT; \
+		TEST_SUMMARIZER_ENABLED=false docker compose up --build --detach --wait; \
+		./scripts/live_provider_test.sh
 
 clean: ## Remove generated build and test artifacts
 	rm -rf backend/dist frontend/dist .tmp .pytest_cache backend/.pytest_cache .mypy_cache backend/.mypy_cache .ruff_cache backend/.ruff_cache htmlcov .coverage

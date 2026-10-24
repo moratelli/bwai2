@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Never, cast
 from uuid import uuid4
 
 import httpx
@@ -86,6 +86,29 @@ async def test_runtime_app_is_ready_with_explicit_smoke_summarizer() -> None:
 def test_worker_uses_explicit_smoke_summarizer_without_gemini() -> None:
     worker = build_worker(
         settings=Settings(test_summarizer_enabled=True),
+        redis=cast(Redis, FakeRedis()),
+        consumer_name="worker-1",
+    )
+
+    assert isinstance(worker, DocumentWorker)
+
+
+def test_explicit_smoke_summarizer_overrides_configured_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_gemini_summarizer(**_kwargs: object) -> Never:
+        raise AssertionError("Gemini summarizer must be disabled in smoke mode")
+
+    monkeypatch.setattr(
+        "document_processor.runtime.GeminiSummarizer",
+        reject_gemini_summarizer,
+    )
+
+    worker = build_worker(
+        settings=Settings(
+            gemini_api_key=SecretStr("test-key"),
+            test_summarizer_enabled=True,
+        ),
         redis=cast(Redis, FakeRedis()),
         consumer_name="worker-1",
     )

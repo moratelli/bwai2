@@ -19,6 +19,24 @@ Preserve headings, lists, tables, and readable text.
 Return an empty markdown string for a blank page. Do not summarize or omit pages.
 """
 
+GEMINI_DOCUMENT_SCHEMA: dict[str, object] = {
+    "type": "OBJECT",
+    "properties": {
+        "pages": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "index": {"type": "INTEGER"},
+                    "markdown": {"type": "STRING"},
+                },
+                "required": ["index", "markdown"],
+            },
+        }
+    },
+    "required": ["pages"],
+}
+
 
 class GeminiPagePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -83,7 +101,7 @@ class GeminiPdfParser:
         ]
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=GeminiDocumentPayload,
+            response_schema=GEMINI_DOCUMENT_SCHEMA,
             temperature=0,
         )
         try:

@@ -80,20 +80,26 @@ def build_worker(
     parsers: dict[ParserKind, DocumentParser] = {
         ParserKind.PYPDF: PyPdfParser(),
     }
-    summarizer: DocumentSummarizer
-    if settings.gemini_api_key is not None:
-        gemini_key = settings.gemini_api_key.get_secret_value()
+    gemini_key = (
+        settings.gemini_api_key.get_secret_value() if settings.gemini_api_key is not None else None
+    )
+    if gemini_key is not None:
         parsers[ParserKind.GEMINI] = GeminiPdfParser(
             model=settings.gemini_model,
             api_key=gemini_key,
         )
+
+    summarizer: DocumentSummarizer
+    if settings.test_summarizer_enabled:
+        summarizer = SmokeTestSummarizer()
+    elif gemini_key is not None:
         summarizer = GeminiSummarizer(
             model=settings.gemini_model,
             chunk_size=settings.summary_chunk_characters,
             api_key=gemini_key,
         )
     else:
-        summarizer = SmokeTestSummarizer()
+        raise RuntimeError("GEMINI_API_KEY is required by the document worker")
 
     if settings.mistral_api_key is not None:
         parsers[ParserKind.MISTRAL] = MistralOcrParser(

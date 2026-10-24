@@ -26,6 +26,15 @@ export interface DocumentClient extends DocumentReader {
 
 export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+const API_PATH_PREFIX = "/api/v1/";
+const browserFetch: Fetcher = globalThis.fetch.bind(globalThis);
+const defaultFetcher: Fetcher = (input, init) => {
+  if (typeof input !== "string" || !input.startsWith(API_PATH_PREFIX)) {
+    return Promise.reject(new TypeError("Only same-origin API paths are allowed."));
+  }
+  return browserFetch(input, init);
+};
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -38,7 +47,7 @@ export class ApiError extends Error {
 }
 
 export class DocumentApi implements DocumentReader {
-  constructor(private readonly fetcher: Fetcher = fetch) {}
+  constructor(private readonly fetcher: Fetcher = defaultFetcher) {}
 
   async submitDocuments(
     files: readonly File[],

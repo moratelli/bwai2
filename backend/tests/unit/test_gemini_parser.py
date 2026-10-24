@@ -9,7 +9,10 @@ from google.genai import types
 from pypdf import PdfWriter
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
-from document_processor.infrastructure.parsers.gemini_parser import GeminiPdfParser
+from document_processor.infrastructure.parsers.gemini_parser import (
+    GEMINI_DOCUMENT_SCHEMA,
+    GeminiPdfParser,
+)
 
 
 def pdf_bytes(page_count: int = 2) -> bytes:
@@ -73,6 +76,15 @@ class FakeProviderError(Exception):
 def client_with(response: str | Exception | None) -> tuple[FakeClient, FakeModels]:
     models = FakeModels(FakeResponse(response) if not isinstance(response, Exception) else response)
     return FakeClient(aio=FakeAsyncClient(models=models)), models
+
+
+def test_provider_schema_uses_only_supported_structured_output_keywords() -> None:
+    serialized_schema = repr(GEMINI_DOCUMENT_SCHEMA)
+
+    assert GEMINI_DOCUMENT_SCHEMA["type"] == "OBJECT"
+    assert "minItems" not in serialized_schema
+    assert "additionalProperties" not in serialized_schema
+    assert "$defs" not in serialized_schema
 
 
 @pytest.mark.asyncio

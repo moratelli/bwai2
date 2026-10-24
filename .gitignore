@@ -18,10 +18,13 @@ htmlcov/
 # JavaScript
 **/node_modules/
 frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 
-# Editor and operating system
+# Editor, agent, and operating system
 .DS_Store
 .idea/
+.pi/
 .vscode/
 
 # Runtime and generated artifacts

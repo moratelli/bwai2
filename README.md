@@ -129,7 +129,7 @@ make setup
 make check
 ```
 
-`make check` verifies generated API drift, Ruff formatting and linting, strict mypy, Oxfmt, Oxlint, strict TypeScript, backend and frontend tests, the Python package build, and the Vite production build.
+`make check` verifies generated API drift, Ruff formatting and linting, strict mypy, Oxfmt, Oxlint, strict application and Playwright TypeScript, backend and frontend tests, the Python package build, and the Vite production build.
 
 If the FastAPI schema changes, regenerate and verify the frontend contract:
 
@@ -146,6 +146,14 @@ make smoke
 
 That target starts Compose with the explicit test summarizer, generates a PDF, uploads it through Nginx, waits for the worker result, checks page text and summary output, and removes the stack and Redis volume afterward.
 
+Run the same workflow through Chromium with:
+
+```bash
+make browser-e2e
+```
+
+This target installs the pinned Playwright Chromium build, opens the real React UI, selects the generated PDF, submits it with PyPDF, waits for the Redis worker result, and checks the rendered summary and page content. CI runs both the HTTP smoke test and this browser test against the same Compose stack, then uploads the Playwright HTML report.
+
 ## Published images
 
 After CI succeeds for a push to `main`, the CD workflow publishes two images:
@@ -157,9 +165,13 @@ Each image gets `sha-<full-commit-sha>` and `latest` tags. Pull requests and `de
 
 ## Live provider checks
 
-The automated suite uses fakes at provider boundaries. To exercise Gemini, put a real `GEMINI_API_KEY` in `.env`, keep `TEST_SUMMARIZER_ENABLED=false`, start the stack, and submit a PDF in the UI. Add `MISTRAL_API_KEY` before testing OCR.
+Unit tests use fakes at provider boundaries so normal CI is deterministic and does not need secrets. To exercise both external integrations, put `GEMINI_API_KEY` and `MISTRAL_API_KEY` in the untracked `.env`, then run:
 
-Provider content and credentials are omitted from worker logs. Logs contain document/message IDs, attempts, outcomes, and safe error codes.
+```bash
+make live-providers
+```
+
+The target starts the normal stack with the test summarizer disabled. It submits one PDF with Gemini and verifies Gemini page extraction plus Gemini summarization, then submits another with Mistral and verifies Mistral OCR plus Gemini summarization. It checks terminal status, ordered non-empty pages, and a non-empty summary without printing credentials or provider content.
 
 ## Deliberate limits
 
