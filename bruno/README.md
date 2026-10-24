@@ -15,9 +15,21 @@ export TEST_SUMMARIZER_ENABLED=false
 make up
 ```
 
-Select **Manual** in Bruno for port `18080`. Select **Local** for the README's default stack on port `8080`. Edit `baseUrl` if you use another port.
-
 Both extraction modes normally call Gemini for the summary. The Gemini folder also sends the PDF to Gemini. The supplied fixtures are synthetic; use non-sensitive files if you replace them.
+
+## Select an environment
+
+1. Open the environment dropdown at the **top right** of Bruno. It may say **No environment**.
+2. Select **Manual** for `http://127.0.0.1:18080`, or **Local** for the README's default stack at `http://127.0.0.1:8080`.
+3. Leave `{{baseUrl}}` in the request URLs. The selected environment supplies its value. If your stack uses another port, edit `baseUrl` in that environment.
+
+### If `{{baseUrl}}` appears red
+
+Check that you have selected **Manual** or **Local**. This collection defines `baseUrl` in its environment files, not in each request.
+
+If those environments are missing, open the repository's `bruno/` folder as a collection rather than using the earlier OpenAPI import. The folder includes `environments/Manual.bru` and `environments/Local.bru` with `baseUrl` already set. You do not need to replace the placeholder in every request.
+
+See [Bruno's environment setup instructions](https://github.com/usebruno/bruno-docs/blob/main/introduction/quick-start.mdx#4-create-an-environment) for the dropdown location.
 
 ## Review the requests
 
