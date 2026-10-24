@@ -27,25 +27,6 @@ The system MUST prevent at-least-once stream delivery from producing conflicting
 - **WHEN** a worker receives an entry for a document already in terminal `failed` state
 - **THEN** the worker performs no provider calls and acknowledges the entry
 
-### Requirement: Extract ordered page content
-The system SHALL store one page result per PDF page in ascending zero-based page order and format each page as Markdown-compatible text.
-
-#### Scenario: PyPDF parser succeeds
-- **WHEN** a text-based PDF is processed with `pypdf`
-- **THEN** each PDF page produces a corresponding page result whose extracted text is safe to render as Markdown text
-
-#### Scenario: Gemini parser succeeds
-- **WHEN** a PDF is processed with `gemini`
-- **THEN** Gemini returns structured page-level Markdown that is validated before storage
-
-#### Scenario: Mistral parser succeeds
-- **WHEN** a PDF is processed with `mistral`
-- **THEN** Mistral OCR page Markdown is normalized and stored in source-page order
-
-#### Scenario: Page has no extractable PyPDF text
-- **WHEN** PyPDF returns no text for a page
-- **THEN** the page remains present with empty content rather than being dropped or renumbered
-
 ### Requirement: Generate one document summary
 The system SHALL use the configured Gemini model to create one Markdown summary from the extracted page content for every successfully parsed document.
 
@@ -59,7 +40,7 @@ The system SHALL use the configured Gemini model to create one Markdown summary 
 
 #### Scenario: Empty extracted document
 - **WHEN** all extracted pages are empty
-- **THEN** the document fails without invoking another parser and explains that a scanned PDF can be resubmitted with Mistral OCR
+- **THEN** the document fails without invoking another parser and explains that no readable text was extracted, with conditional guidance for Fast text users to select Rich Markdown (Gemini) or use a text-based PDF
 
 ### Requirement: Handle transient processing failures
 The system SHALL retry retryable provider and infrastructure failures up to three total processing attempts and SHALL not retry permanent validation or document errors.
@@ -97,3 +78,18 @@ The system SHALL delete the raw uploaded PDF after terminal processing while ret
 #### Scenario: Document fails
 - **WHEN** a document reaches `failed`
 - **THEN** its raw PDF is deleted and its safe failure metadata remains available until the retention period ends
+
+### Requirement: Extract ordered content with supported parsers
+The system SHALL store one page result per PDF page in ascending zero-based page order and format each page as Markdown-compatible text.
+
+#### Scenario: PyPDF parser succeeds
+- **WHEN** a text-based PDF is processed with `pypdf`
+- **THEN** each PDF page produces a corresponding page result whose extracted text is safe to render as Markdown text
+
+#### Scenario: Gemini parser succeeds
+- **WHEN** a PDF is processed with `gemini`
+- **THEN** Gemini returns structured page-level Markdown that is validated before storage
+
+#### Scenario: Page has no extractable PyPDF text
+- **WHEN** PyPDF returns no text for a page
+- **THEN** the page remains present with empty content rather than being dropped or renumbered

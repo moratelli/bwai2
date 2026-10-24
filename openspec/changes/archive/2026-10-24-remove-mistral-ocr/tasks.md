@@ -25,6 +25,7 @@
 
 ## Workflow follow-up
 
-- Run report-only OpenSpec verification and the final implementation review.
+- Report-only OpenSpec verification completed: all six added/modified requirements and both legacy replacements were checked against implementation. The 18 scenarios map to code; UI multi-file and count/size cases have partial test coverage.
+- Final automated review: `PASS_WITH_ADVISORIES` at `a428da411ef5d01b1d41c3e961a15081ff8e338e`. Opus returned no findings. Sol reported the same low-priority UI test gap at `frontend/src/App.test.tsx:74`; it is deferred to Pedro's targeted review. No critical/high findings or implementation fixes remain.
 - Strictly validate and archive `remove-mistral-ocr` after all tracked tasks pass.
 - Push updates to PR #1, wait for required CI checks, and create the reviewed source ZIP from the `dev` revision. Leave PR #1 open for Pedro's requested targeted review. Do not squash, merge, or update `main` until he separately authorizes that delivery step.

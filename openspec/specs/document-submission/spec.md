@@ -9,7 +9,7 @@ Defines how clients submit one or more PDF files, select one parser, and receive
 The system SHALL accept between one and ten PDF files in one multipart request, apply one parser choice to the batch, and create one document job per file.
 
 #### Scenario: Valid multi-file submission
-- **WHEN** a client submits valid PDF files with parser `pypdf`, `gemini`, or `mistral`
+- **WHEN** a client submits valid PDF files with parser `pypdf` or `gemini`
 - **THEN** the API returns HTTP 202 with one unique document identifier and initial `queued` status per file
 
 #### Scenario: Empty submission
@@ -35,21 +35,6 @@ The system MUST reject files that exceed 20 MiB, lack a PDF signature, or use a 
 - **WHEN** any uploaded file has a media type other than `application/pdf`
 - **THEN** the API returns HTTP 422 and creates no jobs for the batch
 
-### Requirement: Validate parser availability
-The system SHALL accept only supported parser values and SHALL reject a parser whose required provider configuration is unavailable.
-
-#### Scenario: Unknown parser
-- **WHEN** a client submits a parser value outside `pypdf`, `gemini`, and `mistral`
-- **THEN** the API returns HTTP 422 with the supported values
-
-#### Scenario: Missing Mistral configuration
-- **WHEN** a client selects `mistral` and Mistral credentials are not configured
-- **THEN** the API returns HTTP 503 without creating document jobs
-
-#### Scenario: Missing Gemini configuration
-- **WHEN** Gemini credentials required for summarization are not configured
-- **THEN** the API returns HTTP 503 for every submission without creating document jobs
-
 ### Requirement: Queue accepted documents
 The system SHALL persist accepted document metadata and payloads before publishing document identifiers for asynchronous processing.
 
@@ -60,3 +45,14 @@ The system SHALL persist accepted document metadata and payloads before publishi
 #### Scenario: Queue publication fails
 - **WHEN** the queue or persistence layer is unavailable during submission
 - **THEN** the API returns HTTP 503 and does not report the batch as accepted
+
+### Requirement: Validate supported parser availability
+The system SHALL accept only supported parser values and SHALL reject a parser whose required provider configuration is unavailable.
+
+#### Scenario: Unknown parser
+- **WHEN** a client submits a parser value outside `pypdf` and `gemini`
+- **THEN** the API returns HTTP 422 with the supported values
+
+#### Scenario: Missing Gemini configuration
+- **WHEN** Gemini credentials required for summarization are not configured
+- **THEN** the API returns HTTP 503 for every submission without creating document jobs

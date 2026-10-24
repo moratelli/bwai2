@@ -17,8 +17,8 @@ The web application SHALL present intent-based processing modes, default to Fast
 - **THEN** Fast text is selected and identifies PyPDF as the provider suitable for normal digital PDFs
 
 #### Scenario: User selects a parser
-- **WHEN** a user chooses Fast text, Rich Markdown, or Scanned document / OCR
-- **THEN** the page identifies its PyPDF, Gemini, or Mistral provider and explains speed, quality, credential, privacy, and OCR trade-offs
+- **WHEN** a user chooses Fast text or Rich Markdown
+- **THEN** the page identifies its PyPDF or Gemini provider and explains speed, quality, credential, privacy, and scanned-page trade-offs
 
 #### Scenario: Browser rejects an obvious invalid selection
 - **WHEN** a user selects a non-PDF file or exceeds the documented file count or size limit
@@ -59,7 +59,7 @@ The web application SHALL show a failed document's safe error message without di
 
 #### Scenario: PyPDF finds no text
 - **WHEN** a Fast text document fails because every page is empty
-- **THEN** the page recommends resubmitting in Scanned document / OCR mode without automatically sending the file to another provider
+- **THEN** the page explains that Fast text cannot read scanned-only pages, suggests selecting Rich Markdown (Gemini) before resubmitting without guaranteeing scan quality, and does not switch parsers automatically
 
 #### Scenario: Upload request is rejected
 - **WHEN** the upload API rejects the batch
