@@ -6,7 +6,7 @@ The implementation favors a clear local review path over production infrastructu
 
 ## Run it
 
-You need Docker with Compose v2. Copy `.env.example` to an untracked `.env`, then set `GEMINI_API_KEY`. Add `MISTRAL_API_KEY` only if you want to try OCR.
+You need Docker with Compose v2. Copy `.env.example` to an untracked `.env`, then set `GEMINI_API_KEY`.
 
 ```bash
 make up
@@ -28,12 +28,11 @@ The UI asks what kind of document it should read instead of presenting unexplain
 | UI mode | API value | Best fit | What leaves the machine |
 | --- | --- | --- | --- |
 | Fast text / PyPDF | `pypdf` | Digital PDFs with selectable text | The PDF is parsed locally. Extracted text goes to Gemini for the summary. |
-| Rich Markdown / Gemini | `gemini` | Tables and layouts that benefit from generative extraction | The PDF goes to Google Gemini. |
-| Scanned document / OCR / Mistral | `mistral` | Scans and image-heavy PDFs | The PDF goes to Mistral; extracted text then goes to Gemini for the summary. |
+| Rich Markdown / Gemini | `gemini` | Tables, complex layouts, and scans; results depend on document quality | The PDF goes to Google Gemini. |
 
-The app does not switch providers behind the user's back. If PyPDF finds no text, the result recommends resubmitting with OCR.
+The app never switches parsers automatically. If Fast text finds no text, choose Rich Markdown / Gemini before resubmitting, or use a PDF with selectable text. Scan quality affects extraction.
 
-Gemini uses `gemini-3.1-flash-lite` by default. Mistral OCR uses `mistral-ocr-latest`. Both model names can be changed in `.env`.
+Gemini uses `gemini-3.1-flash-lite` by default. Its model name can be changed in `.env`.
 
 ## Try the API with curl
 
@@ -89,7 +88,7 @@ FastAPI API  ── validate batch ──> Redis document/source keys
   v                                  v
 poll result <── Redis terminal state <── worker pool
                                        |      |
-                                       |      +── PyPDF / Gemini / Mistral
+                                       |      +── PyPDF / Gemini
                                        +──────── Gemini summary
 ```
 
@@ -108,15 +107,13 @@ Workers use the `document-workers` consumer group. They reclaim stale pending me
 | `APP_PORT` | `8080` | Localhost port for Nginx |
 | `GEMINI_API_KEY` | empty | Required for normal submissions and all normal summaries |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Gemini extraction and summary model |
-| `MISTRAL_API_KEY` | empty | Needed only for OCR mode |
-| `MISTRAL_OCR_MODEL` | `mistral-ocr-latest` | Mistral OCR model |
 | `DOCUMENT_TTL_SECONDS` | `86400` | Redis retention for document records |
 | `MAX_FILES_PER_BATCH` | `10` | Atomic batch limit |
 | `MAX_FILE_SIZE_BYTES` | `20971520` | Per-file limit, 20 MiB by default |
 | `WORKER_CONCURRENCY` | `2` | Consumers in the worker process |
 | `WORKER_MAX_ATTEMPTS` | `3` | Retry ceiling for temporary failures |
 
-Provider keys are runtime variables. They are not copied into images, exposed to Vite, or included in tracked files.
+The Gemini key is a runtime variable. It is not copied into images, exposed to Vite, or included in tracked files.
 
 `TEST_SUMMARIZER_ENABLED` is different: it exists only so the container smoke test can exercise the queue without spending provider quota. Leave it `false` for normal use. It does not enable Gemini parsing or OCR.
 
@@ -137,6 +134,17 @@ If the FastAPI schema changes, regenerate and verify the frontend contract:
 make generate-api
 make check-api
 ```
+
+In a dedicated test shell, select a disposable Compose project and port before running the container checks below:
+
+```bash
+export COMPOSE_PROJECT_NAME=bwai2-check
+export APP_PORT=18080
+export APP_URL=http://127.0.0.1:18080
+export PLAYWRIGHT_BASE_URL="$APP_URL"
+```
+
+The checks remove the selected stack and its Redis volume. Do not point them at a stack whose data you need.
 
 Run the complete credential-free container path with:
 
@@ -163,15 +171,15 @@ After CI succeeds for a push to `main`, the CD workflow publishes two images:
 
 Each image gets `sha-<full-commit-sha>` and `latest` tags. Pull requests and `dev` pushes never publish packages. The workflow checks out the exact revision that passed CI before building either image.
 
-## Live provider checks
+## Live Gemini check
 
-Unit tests use fakes at provider boundaries so normal CI is deterministic and does not need secrets. To exercise both external integrations, put `GEMINI_API_KEY` and `MISTRAL_API_KEY` in the untracked `.env`, then run:
+Unit tests use fakes at provider boundaries so normal CI is deterministic and does not need secrets. To test real Gemini PDF extraction and summarization, configure `GEMINI_API_KEY` in the untracked `.env`, select a disposable test stack as above, then run:
 
 ```bash
 make live-providers
 ```
 
-The target starts the normal stack with the test summarizer disabled. It submits one PDF with Gemini and verifies Gemini page extraction plus Gemini summarization, then submits another with Mistral and verifies Mistral OCR plus Gemini summarization. It checks terminal status, ordered non-empty pages, and a non-empty summary without printing credentials or provider content.
+The target disables the test summarizer and submits one generated PDF with `parser=gemini`. It checks terminal completion, an ordered page list containing extracted text, and a non-empty Gemini summary without printing credentials or provider content. The script also has credential-free tests that replace HTTP responses and verify these checks.
 
 ## Deliberate limits
 
@@ -181,5 +189,6 @@ This is a take-home service, not a multi-tenant document platform.
 - The API holds each bounded upload in memory before the atomic Redis transaction.
 - Result delivery uses polling, not WebSockets or server-sent events.
 - There is no authentication, rate limiting, malware scanning, or per-user isolation.
-- PyPDF does not OCR image-only pages. The app asks the user to choose Mistral OCR explicitly because it changes privacy, latency, and cost.
+- PyPDF does not OCR image-only pages. Rich Markdown uses Gemini's visual PDF processing, but scan quality can limit extraction.
+- Local records from an older parser configuration are not migrated. Start a new test stack, or remove old Redis data only when it is disposable.
 - Provider-backed results depend on external availability and credentials. The smoke summarizer proves orchestration only; it is not a production fallback.

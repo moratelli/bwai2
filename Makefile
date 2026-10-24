@@ -74,10 +74,10 @@ browser-e2e: ## Run the browser workflow against the credential-free stack
 		python3 scripts/generate_sample_pdf.py .tmp/playwright/sample.pdf >/dev/null; \
 		npm run test:e2e --prefix frontend
 
-live-providers: ## Exercise live Gemini extraction/summary and Mistral OCR
+live-providers: ## Exercise live Gemini PDF extraction and summarization
 	@set -e; \
 		if [ ! -f .env ]; then \
-			echo "Create an untracked .env with both provider keys first" >&2; \
+			echo "Create an untracked .env with GEMINI_API_KEY first" >&2; \
 			exit 1; \
 		fi; \
 		trap 'docker compose down --volumes --remove-orphans' EXIT; \

@@ -11,7 +11,8 @@
 
 - [x] 2.1 Record a failing absence check for Mistral in the tracked Compose configuration and environment example, remove those variables, and verify the check passes and Compose configuration renders without displaying credentials. Leave existing private `.env` files untouched.
   - Evidence: the tracked-configuration check failed before the two files were changed and passed afterward. `docker compose --env-file /dev/null config --no-interpolate --quiet`, YAML diagnostics, self-review, and diff checks passed without reading private `.env` contents.
-- [ ] 2.2 Add and run a deterministic failing check that the live-provider harness submits only a generated PDF with `parser=gemini` and retains ordered non-empty page and summary assertions; reduce the harness to that flow and update the Makefile and README. Verify the focused check, shell syntax, and documented command/target consistency.
+- [x] 2.2 Add and run a deterministic failing check that the live-provider harness submits only a generated PDF with `parser=gemini` and retains ordered non-empty page and summary assertions; reduce the harness to that flow and update the Makefile and README. Verify the focused check, shell syntax, and documented command/target consistency.
+  - Evidence: the fake-HTTP harness test first observed two provider submissions and failed. All 6 harness cases now pass, including invalid result and content-logging checks. Ruff, strict mypy, shell syntax, all 10 documented Make targets, disposable Compose project/port/volume overrides, reference checks, and self-review passed.
 
 ## 3. Verify the reduced delivery
 

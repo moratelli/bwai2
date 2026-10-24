@@ -16,7 +16,7 @@ for _ in {1..60}; do
 done
 
 if ! curl --fail --silent "$base_url/health/ready" >"$work_dir/readiness.json"; then
-  echo "Stack did not become ready with live providers" >&2
+  echo "Stack did not become ready with live Gemini" >&2
   exit 1
 fi
 
@@ -83,4 +83,3 @@ PY
 }
 
 run_provider gemini
-run_provider mistral
