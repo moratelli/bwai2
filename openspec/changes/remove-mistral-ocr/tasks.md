@@ -16,7 +16,8 @@
 
 ## 3. Verify the reduced delivery
 
-- [ ] 3.1 Run `make check`, actionlint, targeted LSP diagnostics, and `git diff --check`; verify all static checks, tests, generated-contract drift checks, and builds pass. Confirm tracked runtime, dependency, configuration, and user-facing files have no active Mistral references; OpenSpec records and explicit rejection regression tests are allowed.
+- [x] 3.1 Run `make check`, actionlint, targeted LSP diagnostics, and `git diff --check`; verify all static checks, tests, generated-contract drift checks, and builds pass. Confirm tracked runtime, dependency, configuration, and user-facing files have no active Mistral references; OpenSpec records and explicit rejection regression tests are allowed.
+  - Evidence: fresh `make check` passed with 118 backend tests, 1 skipped, 17 frontend tests, both builds, formatting, lint, strict type checks, and API drift checks. Actionlint 1.7.12 passed. Active LSP checks covered all 21 changed source files with zero diagnostics. Reference and diff checks passed.
 - [ ] 3.2 Use a disposable test stack for the provider-free Compose HTTP smoke and Playwright Chromium workflow, then run the live Gemini target with the generated PDF and existing Gemini configuration. Verify the browser result, ordered non-empty Gemini pages, and non-empty Gemini summary without inspecting credentials or logging provider content; remove only the test stack's disposable volumes.
 - [ ] 3.3 Build and inspect the tracked source ZIP; verify integrity, required lockfiles and Playwright/live-check files, and exclusion of `.git`, `.pi`, `.env`, virtual environments, dependencies, caches, reports, and build output.
 
