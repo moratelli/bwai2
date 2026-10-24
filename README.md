@@ -34,6 +34,12 @@ The app never switches parsers automatically. If Fast text finds no text, choose
 
 Gemini uses `gemini-3.1-flash-lite` by default. Its model name can be changed in `.env`.
 
+### Why Mistral OCR was removed
+
+The assignment also mentions Mistral OCR, but the account available for this exercise had no usable API quota: the recorded limit was zero requests per minute. We could not run and verify the OCR integration, so we removed it and kept PyPDF and Gemini as the supported parsers.
+
+Mistral still documents [Free mode API keys](https://docs.mistral.ai/getting-started/quickstarts/studio/activate-and-generate-api-key) with [organization-specific usage limits](https://docs.mistral.ai/admin/billing-usage/usage-limits). This omission reflects the quota available during development.
+
 ## Try the API with curl
 
 Generate a one-page PDF that PyPDF can extract:
