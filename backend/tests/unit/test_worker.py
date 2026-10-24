@@ -10,7 +10,11 @@ from uuid import UUID
 
 import pytest
 
-from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
+from document_processor.domain.errors import (
+    InfrastructureUnavailableError,
+    PermanentProcessingError,
+    RetryableProcessingError,
+)
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
@@ -173,6 +177,29 @@ async def test_retries_with_exponential_backoff_then_acknowledges_success() -> N
     assert delays == [1, 2]
     assert queue.events[-1] == "ack:1-0"
     assert not any(event.startswith("fail:") for event in repository.events)
+
+
+@pytest.mark.asyncio
+async def test_retries_safe_infrastructure_outage_then_acknowledges_success() -> None:
+    delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    queue = FakeQueue(new=(MESSAGE,))
+    repository = FakeRepository()
+    processor = FakeProcessor(
+        [
+            InfrastructureUnavailableError("Document store"),
+            ProcessingOutcome.COMPLETED,
+        ]
+    )
+
+    await worker(queue, repository, processor, sleep=record_sleep).run_once()
+
+    assert processor.attempts == [1, 2]
+    assert delays == [1]
+    assert queue.events[-1] == "ack:1-0"
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,11 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
+from document_processor.domain.errors import (
+    InfrastructureUnavailableError,
+    PermanentProcessingError,
+    RetryableProcessingError,
+)
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 
@@ -176,7 +180,7 @@ class DocumentWorker:
                     message.document_id,
                     attempt=attempt,
                 )
-            except RetryableProcessingError as error:
+            except (RetryableProcessingError, InfrastructureUnavailableError) as error:
                 if attempt >= self._max_attempts:
                     await self._repository.fail(
                         message.document_id,

@@ -1,15 +1,29 @@
 """Behavior tests for Mistral OCR extraction."""
 
+from base64 import b64encode
 from dataclasses import dataclass
+from io import BytesIO
 
+import httpx
 import pytest
 from mistralai.models import DocumentURLChunk
+from pypdf import PdfWriter
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.infrastructure.parsers.mistral_parser import MistralOcrParser
 
-PDF_BYTES = b"%PDF-1.7\nscan"
-EXPECTED_DATA_URL = "data:application/pdf;base64,JVBERi0xLjcKc2Nhbg=="
+
+def pdf_bytes(page_count: int = 2) -> bytes:
+    output = BytesIO()
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=612, height=792)
+    writer.write(output)
+    return output.getvalue()
+
+
+PDF_BYTES = pdf_bytes()
+EXPECTED_DATA_URL = f"data:application/pdf;base64,{b64encode(PDF_BYTES).decode('ascii')}"
 
 
 @dataclass
@@ -81,7 +95,9 @@ async def test_runs_synchronous_sdk_in_worker_thread(monkeypatch: pytest.MonkeyP
         immediate_to_thread,
     )
     parser = MistralOcrParser(
-        client=FakeClient(FakeOcr(FakeResponse([FakePage(0, "Text")]))),
+        client=FakeClient(
+            FakeOcr(FakeResponse([FakePage(0, "Text"), FakePage(1, "")])),
+        ),
         model="test-model",
     )
 
@@ -96,6 +112,7 @@ async def test_runs_synchronous_sdk_in_worker_thread(monkeypatch: pytest.MonkeyP
     "pages",
     [
         [],
+        [FakePage(0, "A")],
         [FakePage(0, "A"), FakePage(0, "B")],
         [FakePage(1, "B"), FakePage(0, "A")],
         [FakePage(0, "A"), FakePage(2, "C")],
@@ -116,6 +133,20 @@ async def test_rejects_invalid_or_unordered_pages(pages: list[FakePage]) -> None
 async def test_maps_temporary_provider_errors_to_safe_retryable_error(status_code: int) -> None:
     parser = MistralOcrParser(
         client=FakeClient(FakeOcr(FakeProviderError(status_code))),
+        model="test",
+    )
+
+    with pytest.raises(RetryableProcessingError) as caught:
+        await parser.parse(PDF_BYTES)
+
+    assert caught.value.code == "mistral_temporarily_unavailable"
+    assert "sensitive" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_maps_transport_timeout_to_safe_retryable_error() -> None:
+    parser = MistralOcrParser(
+        client=FakeClient(FakeOcr(httpx.ReadTimeout("sensitive timeout"))),
         model="test",
     )
 

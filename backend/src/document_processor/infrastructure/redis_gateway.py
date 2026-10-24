@@ -7,6 +7,7 @@ from typing import Protocol, Self, cast
 from redis.asyncio import Redis
 
 from document_processor.domain.models import NewDocument
+from document_processor.infrastructure.redis_errors import redis_error_boundary
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository, RedisValue
 
 
@@ -50,29 +51,30 @@ class RedisSubmissionGateway:
         self._stream_name = stream_name
 
     async def create_batch(self, documents: Sequence[NewDocument]) -> None:
-        async with self._redis.pipeline(transaction=True) as pipeline:
-            for document in documents:
-                document_key = RedisDocumentRepository.document_key(document.id)
-                pipeline.hset(
-                    document_key,
-                    mapping={
-                        "id": str(document.id),
-                        "filename": document.filename,
-                        "parser": document.parser.value,
-                        "status": document.status.value,
-                        "created_at": document.created_at.isoformat(),
-                        "updated_at": document.created_at.isoformat(),
-                        "attempts": "0",
-                    },
-                )
-                pipeline.expire(document_key, self._ttl_seconds)
-                pipeline.set(
-                    RedisDocumentRepository.source_key(document.id),
-                    document.content,
-                    ex=self._ttl_seconds,
-                )
-                pipeline.xadd(
-                    self._stream_name,
-                    {"document_id": str(document.id)},
-                )
-            await pipeline.execute()
+        with redis_error_boundary("Document queue"):
+            async with self._redis.pipeline(transaction=True) as pipeline:
+                for document in documents:
+                    document_key = RedisDocumentRepository.document_key(document.id)
+                    pipeline.hset(
+                        document_key,
+                        mapping={
+                            "id": str(document.id),
+                            "filename": document.filename,
+                            "parser": document.parser.value,
+                            "status": document.status.value,
+                            "created_at": document.created_at.isoformat(),
+                            "updated_at": document.created_at.isoformat(),
+                            "attempts": "0",
+                        },
+                    )
+                    pipeline.expire(document_key, self._ttl_seconds)
+                    pipeline.set(
+                        RedisDocumentRepository.source_key(document.id),
+                        document.content,
+                        ex=self._ttl_seconds,
+                    )
+                    pipeline.xadd(
+                        self._stream_name,
+                        {"document_id": str(document.id)},
+                    )
+                await pipeline.execute()

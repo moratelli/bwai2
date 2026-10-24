@@ -10,6 +10,8 @@ from mistralai.models import DocumentURLChunk
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.domain.models import PageContent
+from document_processor.infrastructure.parsers.pdf_validation import source_page_count
+from document_processor.infrastructure.provider_errors import is_retryable_provider_error
 
 
 class MistralPageResponse(Protocol):
@@ -58,24 +60,29 @@ class MistralOcrParser:
 
     async def parse(self, content: bytes) -> tuple[PageContent, ...]:
         try:
-            response = await asyncio.to_thread(self._process, content)
+            response, expected_page_count = await asyncio.to_thread(self._process, content)
+        except PermanentProcessingError:
+            raise
         except Exception as error:
             raise self._safe_provider_error(error) from error
-        return self._validated_pages(response.pages)
+        return self._validated_pages(response.pages, expected_page_count)
 
-    def _process(self, content: bytes) -> MistralResponse:
+    def _process(self, content: bytes) -> tuple[MistralResponse, int]:
+        expected_page_count = source_page_count(content)
         encoded = b64encode(content).decode("ascii")
         document = DocumentURLChunk(
             document_url=f"data:application/pdf;base64,{encoded}",
         )
-        return self._client.ocr.process(model=self._model, document=document)
+        response = self._client.ocr.process(model=self._model, document=document)
+        return response, expected_page_count
 
     @staticmethod
     def _validated_pages(
         pages: Sequence[MistralPageResponse],
+        expected_page_count: int,
     ) -> tuple[PageContent, ...]:
         indexes = [page.index for page in pages]
-        if not indexes or indexes != list(range(len(indexes))):
+        if indexes != list(range(expected_page_count)):
             raise PermanentProcessingError(
                 "invalid_provider_response",
                 "Mistral returned an invalid page structure.",
@@ -86,10 +93,7 @@ class MistralOcrParser:
     def _safe_provider_error(
         error: Exception,
     ) -> PermanentProcessingError | RetryableProcessingError:
-        attributes = vars(error)
-        raw_status: object = attributes.get("status_code", attributes.get("code"))
-        status = raw_status if isinstance(raw_status, int) else None
-        if status in {408, 409, 429} or (status is not None and status >= 500):
+        if is_retryable_provider_error(error, "status_code", "code"):
             return RetryableProcessingError(
                 "mistral_temporarily_unavailable",
                 "Mistral is temporarily unavailable.",

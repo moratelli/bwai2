@@ -17,6 +17,7 @@ from document_processor.domain.models import (
     PageContent,
     ParserKind,
 )
+from document_processor.infrastructure.redis_errors import redis_error_boundary
 
 type RedisValue = bytes | str | int | float
 
@@ -93,31 +94,33 @@ class RedisDocumentRepository:
         return f"document:{document_id}:lock"
 
     async def save_queued(self, documents: Sequence[NewDocument]) -> None:
-        async with self._redis.pipeline(transaction=True) as pipeline:
-            for document in documents:
-                key = self.document_key(document.id)
-                pipeline.hset(
-                    key,
-                    mapping={
-                        "id": str(document.id),
-                        "filename": document.filename,
-                        "parser": document.parser.value,
-                        "status": document.status.value,
-                        "created_at": document.created_at.isoformat(),
-                        "updated_at": document.created_at.isoformat(),
-                        "attempts": "0",
-                    },
-                )
-                pipeline.expire(key, self._ttl_seconds)
-                pipeline.set(
-                    self.source_key(document.id),
-                    document.content,
-                    ex=self._ttl_seconds,
-                )
-            await pipeline.execute()
+        with redis_error_boundary("Document store"):
+            async with self._redis.pipeline(transaction=True) as pipeline:
+                for document in documents:
+                    key = self.document_key(document.id)
+                    pipeline.hset(
+                        key,
+                        mapping={
+                            "id": str(document.id),
+                            "filename": document.filename,
+                            "parser": document.parser.value,
+                            "status": document.status.value,
+                            "created_at": document.created_at.isoformat(),
+                            "updated_at": document.created_at.isoformat(),
+                            "attempts": "0",
+                        },
+                    )
+                    pipeline.expire(key, self._ttl_seconds)
+                    pipeline.set(
+                        self.source_key(document.id),
+                        document.content,
+                        ex=self._ttl_seconds,
+                    )
+                await pipeline.execute()
 
     async def get(self, document_id: UUID) -> DocumentRecord | None:
-        raw = await self._redis.hgetall(self.document_key(document_id))
+        with redis_error_boundary("Document store"):
+            raw = await self._redis.hgetall(self.document_key(document_id))
         if not raw:
             return None
         values = self._decode_mapping(raw)
@@ -139,7 +142,8 @@ class RedisDocumentRepository:
         )
 
     async def get_source(self, document_id: UUID) -> bytes | None:
-        source = await self._redis.get(self.source_key(document_id))
+        with redis_error_boundary("Document store"):
+            source = await self._redis.get(self.source_key(document_id))
         if source is None:
             return None
         if isinstance(source, bytes):
@@ -154,16 +158,17 @@ class RedisDocumentRepository:
         updated_at: datetime,
     ) -> bool:
         key = self.document_key(document_id)
-        if not await self._redis.exists(key):
-            return False
-        await self._redis.hset(
-            key,
-            mapping={
-                "status": DocumentStatus.PROCESSING.value,
-                "attempts": str(attempt),
-                "updated_at": updated_at.isoformat(),
-            },
-        )
+        with redis_error_boundary("Document store"):
+            if not await self._redis.exists(key):
+                return False
+            await self._redis.hset(
+                key,
+                mapping={
+                    "status": DocumentStatus.PROCESSING.value,
+                    "attempts": str(attempt),
+                    "updated_at": updated_at.isoformat(),
+                },
+            )
         return True
 
     async def complete(
@@ -179,25 +184,26 @@ class RedisDocumentRepository:
             [{"index": page.index, "markdown": page.markdown} for page in pages],
             separators=(",", ":"),
         )
-        async with self._redis.pipeline(transaction=True) as pipeline:
-            pipeline.hset(
-                self.document_key(document_id),
-                mapping={
-                    "status": DocumentStatus.COMPLETED.value,
-                    "pages": encoded_pages,
-                    "summary": summary,
-                    "attempts": str(attempts),
-                    "updated_at": completed_at.isoformat(),
-                    "completed_at": completed_at.isoformat(),
-                },
-            )
-            pipeline.hdel(
-                self.document_key(document_id),
-                "error_code",
-                "error_message",
-            )
-            pipeline.delete(self.source_key(document_id))
-            await pipeline.execute()
+        with redis_error_boundary("Document store"):
+            async with self._redis.pipeline(transaction=True) as pipeline:
+                pipeline.hset(
+                    self.document_key(document_id),
+                    mapping={
+                        "status": DocumentStatus.COMPLETED.value,
+                        "pages": encoded_pages,
+                        "summary": summary,
+                        "attempts": str(attempts),
+                        "updated_at": completed_at.isoformat(),
+                        "completed_at": completed_at.isoformat(),
+                    },
+                )
+                pipeline.hdel(
+                    self.document_key(document_id),
+                    "error_code",
+                    "error_message",
+                )
+                pipeline.delete(self.source_key(document_id))
+                await pipeline.execute()
 
     async def fail(
         self,
@@ -208,48 +214,51 @@ class RedisDocumentRepository:
         completed_at: datetime,
         attempts: int,
     ) -> None:
-        async with self._redis.pipeline(transaction=True) as pipeline:
-            pipeline.hset(
-                self.document_key(document_id),
-                mapping={
-                    "status": DocumentStatus.FAILED.value,
-                    "error_code": error_code,
-                    "error_message": error_message,
-                    "attempts": str(attempts),
-                    "updated_at": completed_at.isoformat(),
-                    "completed_at": completed_at.isoformat(),
-                },
-            )
-            pipeline.hdel(self.document_key(document_id), "pages", "summary")
-            pipeline.delete(self.source_key(document_id))
-            await pipeline.execute()
+        with redis_error_boundary("Document store"):
+            async with self._redis.pipeline(transaction=True) as pipeline:
+                pipeline.hset(
+                    self.document_key(document_id),
+                    mapping={
+                        "status": DocumentStatus.FAILED.value,
+                        "error_code": error_code,
+                        "error_message": error_message,
+                        "attempts": str(attempts),
+                        "updated_at": completed_at.isoformat(),
+                        "completed_at": completed_at.isoformat(),
+                    },
+                )
+                pipeline.hdel(self.document_key(document_id), "pages", "summary")
+                pipeline.delete(self.source_key(document_id))
+                await pipeline.execute()
 
     async def acquire_lock(self, document_id: UUID, token: str, *, ttl_seconds: int) -> bool:
-        acquired = await self._redis.set(
-            self.lock_key(document_id),
-            token,
-            ex=ttl_seconds,
-            nx=True,
-        )
+        with redis_error_boundary("Document store"):
+            acquired = await self._redis.set(
+                self.lock_key(document_id),
+                token,
+                ex=ttl_seconds,
+                nx=True,
+            )
         return bool(acquired)
 
     async def release_lock(self, document_id: UUID, token: str) -> bool:
         key = self.lock_key(document_id)
-        while True:
-            async with self._redis.pipeline(transaction=True) as pipeline:
-                try:
-                    await pipeline.watch(key)
-                    current = await pipeline.get(key)
-                    expected = token.encode()
-                    if current not in (token, expected):
-                        await pipeline.unwatch()
-                        return False
-                    pipeline.multi()
-                    pipeline.delete(key)
-                    await pipeline.execute()
-                    return True
-                except WatchError:
-                    continue
+        with redis_error_boundary("Document store"):
+            while True:
+                async with self._redis.pipeline(transaction=True) as pipeline:
+                    try:
+                        await pipeline.watch(key)
+                        current = await pipeline.get(key)
+                        expected = token.encode()
+                        if current not in (token, expected):
+                            await pipeline.unwatch()
+                            return False
+                        pipeline.multi()
+                        pipeline.delete(key)
+                        await pipeline.execute()
+                        return True
+                    except WatchError:
+                        continue
 
     @staticmethod
     def _decode_mapping(values: Mapping[bytes | str, bytes | str]) -> dict[str, str]:

@@ -1,14 +1,17 @@
 """Integration tests for temporary Redis document persistence."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 import fakeredis.aioredis
 import pytest
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
+from document_processor.domain.errors import InfrastructureUnavailableError
 from document_processor.domain.models import (
     DocumentStatus,
     NewDocument,
@@ -33,6 +36,12 @@ def queued_document() -> NewDocument:
     )
 
 
+class FailingDocumentRedis:
+    async def hgetall(self, name: str) -> Mapping[bytes | str, bytes | str]:
+        del name
+        raise RedisConnectionError("sensitive Redis connection details")
+
+
 @asynccontextmanager
 async def repository() -> AsyncGenerator[tuple[RedisDocumentRepository, Redis]]:
     redis = fakeredis.aioredis.FakeRedis(decode_responses=False)
@@ -41,6 +50,21 @@ async def repository() -> AsyncGenerator[tuple[RedisDocumentRepository, Redis]]:
         yield repo, redis
     finally:
         await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_translates_native_redis_failure_to_safe_infrastructure_error() -> None:
+    repo = RedisDocumentRepository(
+        cast(Redis, FailingDocumentRedis()),
+        ttl_seconds=86_400,
+    )
+
+    with pytest.raises(InfrastructureUnavailableError) as caught:
+        await repo.get(DOCUMENT_ID)
+
+    assert caught.value.code == "infrastructure_unavailable"
+    assert str(caught.value) == "Document store is temporarily unavailable."
+    assert "sensitive" not in str(caught.value)
 
 
 @pytest.mark.asyncio

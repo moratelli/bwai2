@@ -8,6 +8,7 @@ from google.genai import types
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.domain.models import PageContent
+from document_processor.infrastructure.provider_errors import is_retryable_provider_error
 
 
 class GeminiSummaryResponse(Protocol):
@@ -128,9 +129,7 @@ class GeminiSummarizer:
     def _safe_provider_error(
         error: Exception,
     ) -> PermanentProcessingError | RetryableProcessingError:
-        raw_code: object = vars(error).get("code")
-        code = raw_code if isinstance(raw_code, int) else None
-        if code in {408, 409, 429} or (code is not None and code >= 500):
+        if is_retryable_provider_error(error, "code", "status_code"):
             return RetryableProcessingError(
                 "gemini_temporarily_unavailable",
                 "Gemini is temporarily unavailable.",

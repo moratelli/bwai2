@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+import httpx
 import pytest
 from google.genai import types
 
@@ -147,6 +148,17 @@ async def test_rejects_empty_provider_summary(response: str | None) -> None:
 @pytest.mark.parametrize("code", [408, 409, 429, 500, 503])
 async def test_maps_temporary_provider_errors_to_safe_retryable_error(code: int) -> None:
     summarizer, _models = summarizer_with([FakeProviderError(code)])
+
+    with pytest.raises(RetryableProcessingError) as caught:
+        await summarizer.summarize([PageContent(index=0, markdown="Text")])
+
+    assert caught.value.code == "gemini_temporarily_unavailable"
+    assert "sensitive" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_maps_transport_timeout_to_safe_retryable_error() -> None:
+    summarizer, _models = summarizer_with([httpx.ReadTimeout("sensitive timeout")])
 
     with pytest.raises(RetryableProcessingError) as caught:
         await summarizer.summarize([PageContent(index=0, markdown="Text")])

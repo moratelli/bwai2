@@ -1,14 +1,27 @@
 """Behavior tests for Gemini PDF-to-Markdown extraction."""
 
 from dataclasses import dataclass
+from io import BytesIO
 
+import httpx
 import pytest
 from google.genai import types
+from pypdf import PdfWriter
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.infrastructure.parsers.gemini_parser import GeminiPdfParser
 
-PDF_BYTES = b"%PDF-1.7\ncontent"
+
+def pdf_bytes(page_count: int = 2) -> bytes:
+    output = BytesIO()
+    writer = PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=612, height=792)
+    writer.write(output)
+    return output.getvalue()
+
+
+PDF_BYTES = pdf_bytes()
 
 
 @dataclass
@@ -93,6 +106,7 @@ async def test_extracts_schema_valid_markdown_pages_from_inline_pdf() -> None:
         None,
         "not json",
         '{"pages":[]}',
+        '{"pages":[{"index":0,"markdown":"A"}]}',
         '{"pages":[{"index":0,"markdown":"A"},{"index":0,"markdown":"B"}]}',
         '{"pages":[{"index":1,"markdown":"B"},{"index":0,"markdown":"A"}]}',
         '{"pages":[{"index":0,"markdown":"A"},{"index":2,"markdown":"C"}]}',
@@ -112,6 +126,17 @@ async def test_rejects_invalid_or_unordered_provider_response(response: str | No
 @pytest.mark.parametrize("code", [408, 409, 429, 500, 503])
 async def test_maps_temporary_provider_errors_to_safe_retryable_error(code: int) -> None:
     client, _models = client_with(FakeProviderError(code))
+
+    with pytest.raises(RetryableProcessingError) as caught:
+        await GeminiPdfParser(client=client, model="test-model").parse(PDF_BYTES)
+
+    assert caught.value.code == "gemini_temporarily_unavailable"
+    assert "sensitive" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_maps_transport_timeout_to_safe_retryable_error() -> None:
+    client, _models = client_with(httpx.ReadTimeout("sensitive timeout"))
 
     with pytest.raises(RetryableProcessingError) as caught:
         await GeminiPdfParser(client=client, model="test-model").parse(PDF_BYTES)

@@ -1,5 +1,6 @@
 """Gemini inline-PDF adapter with structured page validation."""
 
+import asyncio
 from collections.abc import Sequence
 from typing import Protocol, cast
 
@@ -9,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.domain.models import PageContent
+from document_processor.infrastructure.parsers.pdf_validation import source_page_count
+from document_processor.infrastructure.provider_errors import is_retryable_provider_error
 
 _EXTRACTION_PROMPT = """Convert every PDF page to faithful Markdown.
 Return one item per source page in source order. Use zero-based, contiguous page indexes.
@@ -73,6 +76,7 @@ class GeminiPdfParser:
         self._model = model
 
     async def parse(self, content: bytes) -> tuple[PageContent, ...]:
+        expected_page_count = await asyncio.to_thread(source_page_count, content)
         contents = [
             types.Part.from_text(text=_EXTRACTION_PROMPT),
             types.Part.from_bytes(data=content, mime_type="application/pdf"),
@@ -90,17 +94,21 @@ class GeminiPdfParser:
             )
         except Exception as error:
             raise self._safe_provider_error(error) from error
-        return self._validated_pages(response.text)
+        return self._validated_pages(response.text, expected_page_count)
 
     @classmethod
-    def _validated_pages(cls, response_text: str | None) -> tuple[PageContent, ...]:
+    def _validated_pages(
+        cls,
+        response_text: str | None,
+        expected_page_count: int,
+    ) -> tuple[PageContent, ...]:
         try:
             if response_text is None:
                 raise ValueError("missing response text")
             payload = GeminiDocumentPayload.model_validate_json(response_text)
             indexes = [page.index for page in payload.pages]
-            if indexes != list(range(len(indexes))):
-                raise ValueError("page indexes must be contiguous and ordered")
+            if indexes != list(range(expected_page_count)):
+                raise ValueError("page indexes must match every source page")
         except (ValidationError, ValueError) as error:
             raise PermanentProcessingError(
                 "invalid_provider_response",
@@ -116,9 +124,7 @@ class GeminiPdfParser:
     def _safe_provider_error(
         error: Exception,
     ) -> PermanentProcessingError | RetryableProcessingError:
-        raw_code: object = vars(error).get("code")
-        code = raw_code if isinstance(raw_code, int) else None
-        if code in {408, 409, 429} or (code is not None and code >= 500):
+        if is_retryable_provider_error(error, "code", "status_code"):
             return RetryableProcessingError(
                 "gemini_temporarily_unavailable",
                 "Gemini is temporarily unavailable.",

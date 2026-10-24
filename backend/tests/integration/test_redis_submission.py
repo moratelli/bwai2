@@ -1,9 +1,10 @@
 """Real Redis integration test for atomic submission publication."""
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from types import TracebackType
+from typing import Protocol, Self, cast
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -13,9 +14,15 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from document_processor.config import Settings
-from document_processor.domain.models import DocumentStatus, ParserKind, UploadCandidate
+from document_processor.domain.errors import InfrastructureUnavailableError
+from document_processor.domain.models import (
+    DocumentStatus,
+    NewDocument,
+    ParserKind,
+    UploadCandidate,
+)
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
-from document_processor.infrastructure.redis_repository import RedisDocumentRepository
+from document_processor.infrastructure.redis_repository import RedisDocumentRepository, RedisValue
 from document_processor.infrastructure.redis_streams import RedisStreamQueue
 from document_processor.services.submission import SubmissionService
 
@@ -40,6 +47,44 @@ def redis_from_url(url: str) -> Redis:
     )
 
 
+class FailingSubmissionPipeline:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+
+    def hset(self, name: str, *, mapping: Mapping[str, RedisValue]) -> Self:
+        del name, mapping
+        return self
+
+    def expire(self, name: str, ttl_seconds: int) -> Self:
+        del name, ttl_seconds
+        return self
+
+    def set(self, name: str, value: RedisValue, *, ex: int) -> Self:
+        del name, value, ex
+        return self
+
+    def xadd(self, name: str, fields: Mapping[str, str]) -> Self:
+        del name, fields
+        return self
+
+    async def execute(self) -> list[object]:
+        raise RedisConnectionError("sensitive Redis connection details")
+
+
+class FailingSubmissionRedis:
+    def pipeline(self, *, transaction: bool = True) -> FailingSubmissionPipeline:
+        del transaction
+        return FailingSubmissionPipeline()
+
+
 @pytest.fixture
 async def redis_client() -> AsyncGenerator[Redis]:
     url = os.getenv("TEST_REDIS_URL")
@@ -58,6 +103,29 @@ async def redis_client() -> AsyncGenerator[Redis]:
     finally:
         await lifecycle.flushdb()
         await lifecycle.aclose()
+
+
+@pytest.mark.asyncio
+async def test_submission_translates_native_redis_failure_to_safe_error() -> None:
+    gateway = RedisSubmissionGateway(
+        cast(Redis, FailingSubmissionRedis()),
+        ttl_seconds=86_400,
+    )
+    document = NewDocument(
+        id=UUID("00000000-0000-4000-8000-000000000001"),
+        filename="one.pdf",
+        parser=ParserKind.PYPDF,
+        status=DocumentStatus.QUEUED,
+        content=b"%PDF-1.7\none",
+        created_at=datetime(2026, 10, 23, 12, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(InfrastructureUnavailableError) as caught:
+        await gateway.create_batch([document])
+
+    assert caught.value.code == "infrastructure_unavailable"
+    assert str(caught.value) == "Document queue is temporarily unavailable."
+    assert "sensitive" not in str(caught.value)
 
 
 @pytest.mark.asyncio
