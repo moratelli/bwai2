@@ -8,7 +8,7 @@ Task 1.1 must update the repository contract and all terminal callers together: 
 
 ## 1. Worker ownership and lifecycle
 
-- [ ] 1.1 Guard processing and every terminal write against expired records, stale lease tokens, and already-terminal state; propagate typed outcomes through ports, processing, and worker acknowledgement decisions. Add failing repository/service/worker tests for both late success and late failure, missing-source and exhaustion handlers, retained TTL, and expiry/token replacement between guard read and commit. Add real Redis 7 integration cases and a dedicated CI Redis service; make a configured but unreachable test Redis fail rather than silently skip. Verify the repository, processing, worker, result API, and real-Redis suites plus backend static gates, actionlint, and `make check-api`; document restart/no-mixed-worker constraints with the change.
+- [ ] 1.1 Guard processing and every terminal write against expired records, stale lease tokens, and already-terminal state; propagate typed outcomes through ports, processing, and worker acknowledgement decisions. Add failing repository/service/worker tests for both late success and late failure, missing-source and exhaustion handlers, retained TTL, and expiry/token replacement between guard read and commit. Add real Redis 7 integration cases and a dedicated CI Redis service; make a configured but unreachable test Redis fail rather than silently skip. Verify the repository, processing, worker, result API, and real-Redis suites plus backend static gates, the pinned workflow check below, and `make check-api`; document restart/no-mixed-worker constraints with the change.
 
 - [ ] 1.2 Renew leases during processing and retry backoff, stop on ownership loss or renewal failure/timeout, and clean up owned tasks and token-checked release on completion and cancellation. Write failing deterministic tests using independent renewal barriers; verify long-running work retains ownership, stale work cannot publish or acknowledge unfinished jobs, expired records are not renewed, and cancellation leaves no renewal task. Run focused worker/repository/runtime tests and backend static gates; document renewal behavior and the remaining possibility of repeated provider calls.
 
@@ -32,11 +32,32 @@ Task 1.1 must update the repository contract and all terminal callers together: 
 
 - [ ] 4.2 Add the standalone labelled-fact checker against that bundle. Write failing tests for missing/swapped pages, wrong values or labels, empty or merely non-empty summaries, and accepted numeric equivalents. Verify positive and negative checker cases and safe failure output without credentials, then run backend/script static gates. Document the checker's supported formatting and limits without claiming it can establish the origin of arbitrary results.
 
-- [ ] 4.3 Build the `make live-quality` runner around the fixture and checker, using its own disposable stack, verified real-summarizer mode, one admitted attempt, bounded requests/deadline, and owned cleanup. First add fake-HTTP/runner tests for successful checks, provider/time-limit failures, failed facts, forbidden fake mode, and cleanup. Run those tests, backend/script static gates, and shell/Make syntax checks; document how to run the command and what one successful result does not prove.
+- [ ] 4.3 Build the `make live-quality` runner around the fixture and checker, using its own disposable stack, verified real-summarizer mode, one admitted attempt, bounded requests/deadline, and owned cleanup. First add fake-HTTP/runner tests for successful checks, provider/time-limit failures, failed facts, forbidden fake mode, and cleanup. Run those tests, backend/script static gates, and the explicit Bash/Make checks below; document how to run the command and what one successful result does not prove.
 
 ## 5. Integrated verification
 
 - [ ] 5.1 After the final implementation edit, run fresh `make check`, the real Redis 7 integration suite on a disposable instance with no unexpected skips, the existing Compose HTTP/concurrency checks, and the browser flow. Run `make live-quality` with the existing Gemini credential under its controlled stack, allowing at most one rerun for a classified transient provider failure. Record exact outcomes and limits, confirm all owned test containers/volumes were removed without touching the owner's stack or private environment files, and verify the source ZIP manifest and contents. A failed quality assertion or unavailable required gate remains a delivery blocker rather than a claimed pass.
+
+## Verification commands
+
+Run these from the repository root at the corresponding task. For task 1.1, use Docker rather than a host `actionlint` installation. Fetch the pinned image with `docker pull rhysd/actionlint:1.7.12` if it is not already available, then run:
+
+```bash
+docker run --rm --network none \
+  --mount type=bind,src="$PWD/.github",dst=/repo/.github,readonly \
+  --workdir /repo rhysd/actionlint:1.7.12 .github/workflows/ci.yml
+```
+
+For task 4.3, check Bash syntax and parse the Make target without executing its recipe:
+
+```bash
+for script in scripts/*.sh; do
+  bash -n "$script" || exit 1
+done
+make -n live-quality >/dev/null
+```
+
+These checks use the existing Docker, Bash, and Make prerequisites; they do not require ShellCheck or shfmt. The independent plan review returned one low-severity finding about unspecified verification tooling and no blockers. The explicit commands resolve that ambiguity. The pinned workflow command was verified against the current workflow; the new Make target will be checked when task 4.3 creates it.
 
 ## Workflow follow-up
 
