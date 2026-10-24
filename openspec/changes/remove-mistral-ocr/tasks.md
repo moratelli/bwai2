@@ -4,7 +4,8 @@
 
 - [x] 1.1 Add and run failing backend and frontend tests for the two-value parser/OpenAPI enums, HTTP 422 rejection of `mistral` before job creation, only Fast text and Rich Markdown in the UI, rejection of `mistral` in decoded responses, and conditional PyPDF-specific no-text guidance. Remove Mistral from the domain, submission checks, runtime settings/assembly, adapter, frontend mode list, decoder, and obsolete tests; regenerate `frontend/openapi.json` and `frontend/src/generated/api.ts`. Commit the backend contract, generated files, frontend consumers, and tests together only after `make check-api`, focused backend/Vitest tests, Ruff, strict mypy, Oxfmt, Oxlint, and both frontend TypeScript checks pass.
   - Evidence: RED recorded 8 backend and 5 frontend assertion failures before production edits. GREEN passed 50 focused backend and 14 UI/decoder tests. `make format-check lint typecheck check-api`, self-review, and `git diff --check` passed. Validation errors now list only the supported enum values.
-- [ ] 1.2 Remove the unused Mistral SDK and its mypy override through uv and project configuration; verify locked dependency installation, the absence of Mistral from the lockfile, and the relevant backend checks.
+- [x] 1.2 Remove the unused Mistral SDK and its mypy override through uv and project configuration; verify locked dependency installation, the absence of Mistral from the lockfile, and the relevant backend checks.
+  - Evidence: the dependency-absence check failed before removal and passed afterward. `uv sync --all-groups --locked`, Ruff, strict mypy, 37 runtime/Gemini tests, and diff checks passed. The lockfile lost the SDK and 14 unused transitive packages; no remaining package was added or upgraded.
 
 ## 2. Remove obsolete delivery wiring
 
