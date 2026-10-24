@@ -61,7 +61,9 @@ class GeminiSummarizer:
         if not any(page.markdown.strip() for page in pages):
             raise PermanentProcessingError(
                 "empty_extraction",
-                "No extractable text was found. Resubmit scanned PDFs with Mistral OCR.",
+                "No readable text was extracted. "
+                "If you used Fast text, it cannot read scanned pages; "
+                "try Rich Markdown (Gemini) or a text-based PDF.",
             )
 
         chunks = self._page_chunks(pages)

@@ -91,7 +91,9 @@ def create_app(
             content={
                 "error": {
                     "code": "invalid_request",
-                    "message": "Provide at least one PDF and a supported parser.",
+                    "message": (
+                        f"Provide at least one PDF and a supported parser: {', '.join(ParserKind)}."
+                    ),
                 }
             },
         )

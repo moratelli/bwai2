@@ -41,11 +41,8 @@ def pdf(
     return UploadCandidate(filename=name, content_type=content_type, content=content)
 
 
-def settings(*, gemini: bool = True, mistral: bool = True) -> Settings:
-    return Settings(
-        gemini_api_key=SecretStr("gemini-test") if gemini else None,
-        mistral_api_key=SecretStr("mistral-test") if mistral else None,
-    )
+def settings(*, gemini: bool = True) -> Settings:
+    return Settings(gemini_api_key=SecretStr("gemini-test") if gemini else None)
 
 
 def service(
@@ -67,14 +64,15 @@ def service(
     )
 
 
-@pytest.mark.parametrize("value", ["pypdf", "gemini", "mistral"])
+@pytest.mark.parametrize("value", ["pypdf", "gemini"])
 def test_parser_kind_accepts_supported_values(value: str) -> None:
     assert ParserKind(value).value == value
 
 
-def test_parser_kind_rejects_unknown_value() -> None:
+@pytest.mark.parametrize("value", ["automatic", "mistral"])
+def test_parser_kind_rejects_unsupported_values(value: str) -> None:
     with pytest.raises(ValueError):
-        ParserKind("automatic")
+        ParserKind(value)
 
 
 @pytest.mark.asyncio
@@ -201,15 +199,3 @@ async def test_allows_pypdf_with_explicit_smoke_summarizer() -> None:
     assert len(accepted) == 1
     with pytest.raises(ProviderUnavailableError, match="Gemini"):
         await service(gateway, app_settings=app_settings).submit([pdf()], ParserKind.GEMINI)
-
-
-@pytest.mark.asyncio
-async def test_requires_mistral_only_for_mistral_parser() -> None:
-    gateway = RecordingGateway()
-    app_settings = settings(mistral=False)
-
-    with pytest.raises(ProviderUnavailableError, match="Mistral"):
-        await service(gateway, app_settings=app_settings).submit([pdf()], ParserKind.MISTRAL)
-
-    accepted = await service(gateway, app_settings=app_settings).submit([pdf()], ParserKind.PYPDF)
-    assert len(accepted) == 1

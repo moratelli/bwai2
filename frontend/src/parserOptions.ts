@@ -9,12 +9,6 @@ export const parserOptions = [
     value: "gemini",
     label: "Rich Markdown / Gemini",
     description:
-      "Better suited to complex layouts and tables. It sends the PDF to Google, needs a Gemini key, and may add latency and usage cost.",
-  },
-  {
-    value: "mistral",
-    label: "Scanned document / OCR / Mistral",
-    description:
-      "Use this for scans and image-heavy PDFs. It sends the PDF to Mistral, needs a Mistral key, and may add latency and usage cost.",
+      "For complex layouts, tables, and scans. It sends the PDF to Google, needs a Gemini key, and may add latency and usage cost. Scan quality affects results.",
   },
 ] as const;

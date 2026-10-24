@@ -33,14 +33,12 @@ async def api_client(
     *,
     gateway: RecordingGateway | FailingGateway | None = None,
     gemini: bool = True,
-    mistral: bool = True,
     max_files: int = 10,
     max_bytes: int = 20 * 1024 * 1024,
 ) -> AsyncGenerator[tuple[AsyncClient, RecordingGateway | FailingGateway]]:
     selected_gateway = gateway or RecordingGateway()
     settings = Settings(
         gemini_api_key=SecretStr("gemini-test") if gemini else None,
-        mistral_api_key=SecretStr("mistral-test") if mistral else None,
         max_files_per_batch=max_files,
         max_file_size_bytes=max_bytes,
     )
@@ -160,16 +158,23 @@ async def test_returns_503_when_gemini_is_not_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_returns_503_when_mistral_is_selected_without_key() -> None:
-    async with api_client(mistral=False) as (client, _gateway):
+@pytest.mark.parametrize("gemini", [True, False])
+async def test_rejects_retired_parser_before_provider_checks_or_job_creation(gemini: bool) -> None:
+    async with api_client(gemini=gemini) as (client, gateway):
         response = await client.post(
             "/api/v1/documents",
             data={"parser": "mistral"},
             files=[("files", pdf_file())],
         )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "provider_unavailable"
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "invalid_request"
+    assert "pypdf" in error["message"]
+    assert "gemini" in error["message"]
+    assert "mistral" not in error["message"]
+    assert isinstance(gateway, RecordingGateway)
+    assert gateway.batches == []
 
 
 @pytest.mark.asyncio

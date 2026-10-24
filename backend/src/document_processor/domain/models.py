@@ -9,7 +9,6 @@ from uuid import UUID
 class ParserKind(StrEnum):
     PYPDF = "pypdf"
     GEMINI = "gemini"
-    MISTRAL = "mistral"
 
 
 class DocumentStatus(StrEnum):

@@ -29,3 +29,8 @@ async def test_smoke_summarizer_rejects_empty_extraction() -> None:
         await summarizer.summarize((PageContent(index=0, markdown="  "),))
 
     assert error.value.code == "empty_extraction"
+    assert str(error.value) == (
+        "No readable text was extracted. "
+        "If you used Fast text, it cannot read scanned pages; "
+        "try Rich Markdown (Gemini) or a text-based PDF."
+    )

@@ -226,7 +226,7 @@ export interface components {
      * ParserKind
      * @enum {string}
      */
-    ParserKind: "pypdf" | "gemini" | "mistral";
+    ParserKind: "pypdf" | "gemini";
     /** ProcessingDocumentResponse */
     ProcessingDocumentResponse: {
       /** Attempts */

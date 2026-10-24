@@ -128,7 +128,11 @@ async def test_empty_extraction_fails_without_provider_request() -> None:
         )
 
     assert caught.value.code == "empty_extraction"
-    assert "OCR" in str(caught.value)
+    assert str(caught.value) == (
+        "No readable text was extracted. "
+        "If you used Fast text, it cannot read scanned pages; "
+        "try Rich Markdown (Gemini) or a text-based PDF."
+    )
     assert models.requests == []
 
 

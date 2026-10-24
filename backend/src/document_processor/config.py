@@ -16,8 +16,6 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-3.1-flash-lite"
-    mistral_api_key: SecretStr | None = None
-    mistral_ocr_model: str = "mistral-ocr-latest"
     document_ttl_seconds: int = Field(default=86_400, gt=0)
     max_files_per_batch: int = Field(default=10, gt=0)
     max_file_size_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
@@ -34,7 +32,7 @@ class Settings(BaseSettings):
     worker_batch_size: int = Field(default=10, gt=0)
     worker_lock_ttl_seconds: int = Field(default=300, gt=0)
 
-    @field_validator("gemini_api_key", "mistral_api_key", mode="before")
+    @field_validator("gemini_api_key", mode="before")
     @classmethod
     def empty_credentials_are_missing(cls, value: object) -> object:
         """Treat Compose's empty optional variables as unconfigured."""
@@ -49,8 +47,3 @@ class Settings(BaseSettings):
     def summary_available(self) -> bool:
         """Return whether production or explicitly test-only summarization is available."""
         return self.gemini_available or self.test_summarizer_enabled
-
-    @property
-    def mistral_available(self) -> bool:
-        """Return whether the optional OCR mode can be requested."""
-        return self.mistral_api_key is not None

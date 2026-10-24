@@ -63,10 +63,11 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "Async document processor" })).toBeVisible();
     expect(screen.getByRole("radio", { name: /Fast text \/ PyPDF/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /Rich Markdown \/ Gemini/ })).not.toBeChecked();
-    expect(
-      screen.getByRole("radio", { name: /Scanned document \/ OCR \/ Mistral/ }),
-    ).not.toBeChecked();
+    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    expect(screen.queryByRole("radio", { name: /Mistral/ })).toBeNull();
+    expect(screen.queryByText(/Mistral/)).toBeNull();
     expect(screen.getByText(/does not OCR scanned pages/i)).toBeVisible();
+    expect(screen.getByText(/scan quality affects results/i)).toBeVisible();
     expect(screen.getByText(/every completed document uses Gemini for its summary/i)).toBeVisible();
   });
 
@@ -149,7 +150,7 @@ describe("App", () => {
     expect(window).not.toHaveProperty("hacked", true);
   });
 
-  it("recommends explicit OCR resubmission without changing parser automatically", async () => {
+  it("suggests an explicit Gemini retry for Fast text without switching parsers", async () => {
     const emptyFailure: DocumentResource = {
       ...accepted,
       status: "failed",
@@ -164,7 +165,28 @@ describe("App", () => {
     const client = fakeClient();
     renderApp(client, [emptyFailure]);
 
-    expect(screen.getByText(/try again with Scanned document \/ OCR \/ Mistral/i)).toBeVisible();
+    expect(screen.getByText(/try again with Rich Markdown \/ Gemini/i)).toBeVisible();
+    expect(screen.getByText(/Fast text cannot read scanned pages/i)).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Fast text \/ PyPDF/ })).toBeChecked();
+    await act(async () => undefined);
+    expect(client.submitDocuments).not.toHaveBeenCalled();
+  });
+
+  it("does not suggest retrying Gemini when Gemini already returned no text", async () => {
+    const emptyFailure: DocumentResource = {
+      ...accepted,
+      parser: "gemini",
+      status: "failed",
+      updated_at: "2026-10-23T12:01:00Z",
+      completed_at: "2026-10-23T12:01:00Z",
+      attempts: 1,
+      error: { code: "empty_extraction", message: "No readable text was extracted." },
+    };
+    const client = fakeClient();
+    renderApp(client, [emptyFailure]);
+
+    expect(screen.getByText("No readable text was extracted.")).toBeVisible();
+    expect(screen.queryByText(/try again with/i)).toBeNull();
     expect(screen.getByRole("radio", { name: /Fast text \/ PyPDF/ })).toBeChecked();
     await act(async () => undefined);
     expect(client.submitDocuments).not.toHaveBeenCalled();

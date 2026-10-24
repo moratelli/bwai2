@@ -116,6 +116,12 @@ def test_explicit_smoke_summarizer_overrides_configured_gemini(
     assert isinstance(worker, DocumentWorker)
 
 
+def test_runtime_settings_do_not_expose_the_retired_provider() -> None:
+    assert "mistral_api_key" not in Settings.model_fields
+    assert "mistral_ocr_model" not in Settings.model_fields
+    assert not hasattr(Settings, "mistral_available")
+
+
 def test_worker_concurrency_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         Settings(worker_concurrency=0)

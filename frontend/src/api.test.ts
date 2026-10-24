@@ -68,6 +68,45 @@ describe("DocumentApi", () => {
     );
   });
 
+  it("rejects the retired parser in submission responses", async () => {
+    const fetcher = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValue(
+        jsonResponse(
+          {
+            documents: acceptedBody.documents.map((document) => ({
+              ...document,
+              parser: "mistral",
+            })),
+          },
+          202,
+        ),
+      );
+
+    await expect(
+      new DocumentApi(fetcher).submitDocuments(
+        [new File(["%PDF"], "one.pdf", { type: "application/pdf" })],
+        "pypdf",
+      ),
+    ).rejects.toThrow("invalid response");
+  });
+
+  it("rejects the retired parser in polled responses", async () => {
+    const queued = {
+      ...acceptedBody.documents[0],
+      parser: "mistral",
+      updated_at: "2026-10-23T12:01:00Z",
+      attempts: 0,
+    };
+    const fetcher = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValue(jsonResponse(queued));
+
+    await expect(new DocumentApi(fetcher).getDocument(queued.id)).rejects.toThrow(
+      "invalid response",
+    );
+  });
+
   it("throws the safe API error envelope", async () => {
     const fetcher = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()

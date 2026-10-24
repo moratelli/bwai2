@@ -159,7 +159,7 @@ function number(value: Record<string, unknown>, key: string): number {
 }
 
 function parserKind(value: unknown): ParserKind {
-  if (value !== "pypdf" && value !== "gemini" && value !== "mistral") invalidResponse();
+  if (value !== "pypdf" && value !== "gemini") invalidResponse();
   return value;
 }
 

@@ -9,7 +9,6 @@ from document_processor.api.app import create_app
 from document_processor.config import Settings
 from document_processor.domain.models import ParserKind
 from document_processor.infrastructure.parsers.gemini_parser import GeminiPdfParser
-from document_processor.infrastructure.parsers.mistral_parser import MistralOcrParser
 from document_processor.infrastructure.parsers.pypdf_parser import PyPdfParser
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
@@ -100,12 +99,6 @@ def build_worker(
         )
     else:
         raise RuntimeError("GEMINI_API_KEY is required by the document worker")
-
-    if settings.mistral_api_key is not None:
-        parsers[ParserKind.MISTRAL] = MistralOcrParser(
-            model=settings.mistral_ocr_model,
-            api_key=settings.mistral_api_key.get_secret_value(),
-        )
 
     parser_registry: ParserRegistry = parsers
     repository = RedisDocumentRepository(

@@ -19,7 +19,9 @@ class SmokeTestSummarizer:
         if not extracted:
             raise PermanentProcessingError(
                 "empty_extraction",
-                "No extractable text was found. Resubmit scanned PDFs with Mistral OCR.",
+                "No readable text was extracted. "
+                "If you used Fast text, it cannot read scanned pages; "
+                "try Rich Markdown (Gemini) or a text-based PDF.",
             )
         if len(extracted) > self._max_characters:
             extracted = f"{extracted[: self._max_characters - 1].rstrip()}…"

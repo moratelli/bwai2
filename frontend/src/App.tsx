@@ -130,7 +130,7 @@ export function App({ client = defaultClient }: AppProps) {
         </button>
         <p className="provider-note">
           Every completed document uses Gemini for its summary, including files extracted locally
-          with PyPDF or parsed with Mistral OCR.
+          with PyPDF.
         </p>
       </form>
 
@@ -185,9 +185,10 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
       {document.status === "failed" && (
         <div className="failure-block">
           <p role="alert">{document.error.message}</p>
-          {document.error.code === "empty_extraction" && (
+          {document.error.code === "empty_extraction" && document.parser === "pypdf" && (
             <p>
-              Try again with Scanned document / OCR / Mistral. The app will not switch parsers
+              Fast text cannot read scanned pages. Try again with Rich Markdown / Gemini, or use a
+              text-based PDF. Scan quality affects extraction. The app will not switch parsers
               automatically.
             </p>
           )}

@@ -78,8 +78,6 @@ class SubmissionService:
             raise ProviderUnavailableError("Gemini")
         if parser is ParserKind.GEMINI and not self._settings.gemini_available:
             raise ProviderUnavailableError("Gemini")
-        if parser is ParserKind.MISTRAL and not self._settings.mistral_available:
-            raise ProviderUnavailableError("Mistral")
 
     def _validate_batch(self, candidates: Sequence[UploadCandidate]) -> None:
         if not candidates:

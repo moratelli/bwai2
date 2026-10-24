@@ -3,6 +3,7 @@
 from typing import cast
 
 from document_processor.api.app import create_app
+from document_processor.domain.models import ParserKind
 
 
 def mapping(value: object) -> dict[str, object]:
@@ -13,6 +14,10 @@ def mapping(value: object) -> dict[str, object]:
 def sequence(value: object) -> list[object]:
     assert isinstance(value, list)
     return cast(list[object], value)
+
+
+def test_parser_domain_contains_only_supported_modes() -> None:
+    assert [parser.value for parser in ParserKind] == ["pypdf", "gemini"]
 
 
 def test_openapi_matches_upload_polling_result_health_and_error_contracts() -> None:
@@ -32,7 +37,7 @@ def test_openapi_matches_upload_polling_result_health_and_error_contracts() -> N
         assert mapping(error_schema["schema"])["$ref"] == "#/components/schemas/ErrorResponse"
 
     parser = mapping(components["ParserKind"])
-    assert parser["enum"] == ["pypdf", "gemini", "mistral"]
+    assert parser["enum"] == ["pypdf", "gemini"]
 
     result = mapping(mapping(paths["/api/v1/documents/{document_id}"])["get"])
     result_responses = mapping(result["responses"])
