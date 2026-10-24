@@ -9,7 +9,8 @@
 
 ## 2. Remove obsolete delivery wiring
 
-- [ ] 2.1 Record a failing absence check for Mistral in the tracked Compose configuration and environment example, remove those variables, and verify the check passes and Compose configuration renders without displaying credentials. Leave existing private `.env` files untouched.
+- [x] 2.1 Record a failing absence check for Mistral in the tracked Compose configuration and environment example, remove those variables, and verify the check passes and Compose configuration renders without displaying credentials. Leave existing private `.env` files untouched.
+  - Evidence: the tracked-configuration check failed before the two files were changed and passed afterward. `docker compose --env-file /dev/null config --no-interpolate --quiet`, YAML diagnostics, self-review, and diff checks passed without reading private `.env` contents.
 - [ ] 2.2 Add and run a deterministic failing check that the live-provider harness submits only a generated PDF with `parser=gemini` and retains ordered non-empty page and summary assertions; reduce the harness to that flow and update the Makefile and README. Verify the focused check, shell syntax, and documented command/target consistency.
 
 ## 3. Verify the reduced delivery
