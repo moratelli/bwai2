@@ -213,6 +213,10 @@ make browser-e2e
 
 This target installs the pinned Playwright Chromium build, opens the real React UI, selects the generated PDF, submits it with PyPDF, waits for the Redis worker result, and checks the rendered summary and page content. CI runs both the HTTP smoke test and this browser test against the same Compose stack, then uploads the Playwright HTML report.
 
+## Quality fixture
+
+`fixtures/quality-report.pdf` is a deterministic two-page synthetic report with a revenue table. The [fixture guide](fixtures/README.md) explains regeneration and offline labelled-fact checks. These checks do not use provider credentials.
+
 ## Published images
 
 After CI succeeds for a push to `main`, the CD workflow publishes two images:
