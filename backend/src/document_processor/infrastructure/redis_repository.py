@@ -225,6 +225,28 @@ class RedisDocumentRepository:
             clear_fields=("pages", "summary"),
         )
 
+    async def _watch_owned_document(
+        self,
+        pipeline: AsyncRedisPipeline,
+        document_id: UUID,
+        token: str,
+    ) -> dict[str, str] | StateTransition:
+        key, lock = self.document_key(document_id), self.lock_key(document_id)
+        await pipeline.watch(key, lock)
+        values = self._decode_mapping(await pipeline.hgetall(key))
+        if not values:
+            return StateTransition.NOT_FOUND
+        status = values.get("status")
+        if status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
+            return StateTransition.ALREADY_TERMINAL
+        owner = await pipeline.get(lock)
+        if owner not in (token, token.encode()) or status not in {
+            DocumentStatus.QUEUED,
+            DocumentStatus.PROCESSING,
+        }:
+            return StateTransition.LOST_OWNERSHIP
+        return values
+
     async def _update_owned(
         self,
         document_id: UUID,
@@ -234,26 +256,16 @@ class RedisDocumentRepository:
         terminal_attempt: int | None = None,
         clear_fields: tuple[str, ...] = (),
     ) -> StateTransition:
-        key, lock = self.document_key(document_id), self.lock_key(document_id)
+        key = self.document_key(document_id)
         with redis_error_boundary("Document store"):
             while True:
                 async with self._redis.pipeline(transaction=True) as pipeline:
                     try:
-                        await pipeline.watch(key, lock)
-                        values = self._decode_mapping(await pipeline.hgetall(key))
-                        if not values:
-                            return StateTransition.NOT_FOUND
-                        status = values.get("status")
-                        if status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
-                            return StateTransition.ALREADY_TERMINAL
-                        owner = await pipeline.get(lock)
-                        if owner not in (token, token.encode()) or status not in {
-                            DocumentStatus.QUEUED,
-                            DocumentStatus.PROCESSING,
-                        }:
-                            return StateTransition.LOST_OWNERSHIP
+                        values = await self._watch_owned_document(pipeline, document_id, token)
+                        if isinstance(values, StateTransition):
+                            return values
                         if terminal_attempt is not None and (
-                            status != DocumentStatus.PROCESSING
+                            values.get("status") != DocumentStatus.PROCESSING
                             or terminal_attempt <= 0
                             or values.get("attempts") != str(terminal_attempt)
                         ):
@@ -278,6 +290,27 @@ class RedisDocumentRepository:
                 nx=True,
             )
         return bool(acquired)
+
+    async def renew_lock(
+        self,
+        document_id: UUID,
+        token: str,
+        *,
+        ttl_seconds: int,
+    ) -> StateTransition:
+        with redis_error_boundary("Document store"):
+            while True:
+                async with self._redis.pipeline(transaction=True) as pipeline:
+                    try:
+                        values = await self._watch_owned_document(pipeline, document_id, token)
+                        if isinstance(values, StateTransition):
+                            return values
+                        pipeline.multi()
+                        pipeline.expire(self.lock_key(document_id), ttl_seconds)
+                        await pipeline.execute()
+                        return StateTransition.APPLIED
+                    except WatchError:
+                        continue
 
     async def release_lock(self, document_id: UUID, token: str) -> bool:
         key = self.lock_key(document_id)

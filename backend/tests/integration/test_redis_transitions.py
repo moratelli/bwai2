@@ -30,7 +30,7 @@ from document_processor.worker import DocumentWorker
 
 NOW = datetime(2026, 10, 24, tzinfo=UTC)
 OWNER = "current-owner"
-type Operation = Literal["processing", "complete", "fail"]
+type Operation = Literal["processing", "complete", "fail", "renew"]
 
 
 @dataclass
@@ -97,6 +97,8 @@ async def transition(
             attempt=attempt,
             updated_at=NOW,
         )
+    elif operation == "renew":
+        return await repository.renew_lock(identifier, OWNER, ttl_seconds=30)
     elif operation == "complete":
         return await repository.complete(
             identifier,
@@ -117,7 +119,7 @@ async def transition(
         )
 
 
-@pytest.mark.parametrize("operation", ["processing", "complete", "fail"])
+@pytest.mark.parametrize("operation", ["processing", "complete", "fail", "renew"])
 async def test_absent_document_stays_absent(store: Store, operation: Operation) -> None:
     key = store.repository.document_key(store.document.id)
     await store.redis.delete(key)
@@ -129,7 +131,7 @@ async def test_absent_document_stays_absent(store: Store, operation: Operation) 
     assert await store.repository.get_source(store.document.id) == store.document.content
 
 
-@pytest.mark.parametrize("operation", ["processing", "complete", "fail"])
+@pytest.mark.parametrize("operation", ["processing", "complete", "fail", "renew"])
 async def test_replaced_owner_cannot_write_or_delete_source(
     store: Store,
     operation: Operation,
@@ -144,7 +146,7 @@ async def test_replaced_owner_cannot_write_or_delete_source(
 
 
 @pytest.mark.parametrize("terminal", ["complete", "fail"])
-@pytest.mark.parametrize("operation", ["processing", "complete", "fail"])
+@pytest.mark.parametrize("operation", ["processing", "complete", "fail", "renew"])
 async def test_terminal_results_are_immutable(
     store: Store,
     terminal: Operation,
@@ -172,7 +174,7 @@ async def test_old_attempt_cannot_publish_under_the_same_lease(
     assert await store.repository.get_source(store.document.id) == store.document.content
 
 
-@pytest.mark.parametrize("operation", ["processing", "complete", "fail"])
+@pytest.mark.parametrize("operation", ["processing", "complete", "fail", "renew"])
 @pytest.mark.parametrize("interruption", ["expiry", "replacement"])
 async def test_guards_are_rechecked_when_state_changes_before_exec(
     store: Store,
@@ -241,6 +243,35 @@ async def test_valid_publication_keeps_the_original_retention_deadline(
     assert document.completed_at == NOW
     assert await store.repository.get_source(store.document.id) is None
     assert 0 < await store.redis.pttl(key) <= before
+
+
+async def test_renewal_extends_only_the_owned_lease(store: Store) -> None:
+    key = store.repository.document_key(store.document.id)
+    lock = store.repository.lock_key(store.document.id)
+    await store.redis.pexpire(key, 5000)
+    await store.redis.pexpire(lock, 500)
+    document_before = await store.repository.get(store.document.id)
+    document_ttl = await store.redis.pttl(key)
+    lease_ttl = await store.redis.pttl(lock)
+
+    assert await transition(store, "renew") is StateTransition.APPLIED
+
+    assert await store.redis.get(lock) == OWNER.encode()
+    assert await store.redis.pttl(lock) > lease_ttl
+    assert 0 < await store.redis.pttl(key) <= document_ttl
+    assert await store.repository.get(store.document.id) == document_before
+    assert await store.repository.get_source(store.document.id) == store.document.content
+
+
+async def test_renewal_cannot_reacquire_an_expired_lease(store: Store) -> None:
+    lock = store.repository.lock_key(store.document.id)
+    await store.redis.delete(lock)
+    before = await store.repository.get(store.document.id)
+
+    assert await transition(store, "renew") is StateTransition.LOST_OWNERSHIP
+
+    assert await store.redis.exists(lock) == 0
+    assert await store.repository.get(store.document.id) == before
 
 
 async def interrupt_owner(store: Store, interruption: str) -> None:

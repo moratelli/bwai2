@@ -110,6 +110,10 @@ Workers use the `document-workers` consumer group. They reclaim stale pending me
 
 State changes check the current lease owner and the live document record in the same Redis transaction. Terminal writes also check the processing attempt. A stale worker cannot overwrite a result, delete another worker's source, or recreate an expired record. Processing does not extend the original retention deadline.
 
+The worker renews its lease every third of its configured lifetime, including while waiting between retries. If renewal fails or cannot be confirmed within that interval, it cancels local processing and leaves unfinished work pending. Cleanup cancels and awaits the owned tasks and bounds lease release to at most five seconds. A failed release is logged without replacing the original processing or cancellation outcome.
+
+Cancellation cannot revoke a provider request already sent. A crash or lost lease can still lead to repeated provider calls; the ownership checks protect stored results, not exactly-once execution.
+
 When upgrading from the earlier worker implementation, stop all old workers before starting the new version. Mixed worker versions are unsafe because the old code can still write without these guards. Keep Redis data and let pending jobs recover; do not delete locks to speed up a restart.
 
 ## Configuration

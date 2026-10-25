@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
@@ -71,11 +72,19 @@ class FakeQueue:
 class FakeRepository:
     lock_available: bool = True
     events: list[str] = field(default_factory=lambda: list[str]())
+    release_error: Exception | None = None
+    lease_seconds: int = 60
+    renewal_result: StateTransition | Exception = StateTransition.APPLIED
+    renewal_gate: asyncio.Event | None = None
+    renewal_seen: asyncio.Event = field(default_factory=asyncio.Event)
+    renewals: int = 0
+    release_gate: asyncio.Event | None = None
+    release_finished: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def acquire_lock(self, document_id: UUID, token: str, *, ttl_seconds: int) -> bool:
         assert document_id == DOCUMENT_ID
         assert token == LOCK_OWNER
-        assert ttl_seconds == 60
+        assert ttl_seconds == self.lease_seconds
         self.events.append("lock")
         return self.lock_available
 
@@ -83,7 +92,33 @@ class FakeRepository:
         assert document_id == DOCUMENT_ID
         assert token == LOCK_OWNER
         self.events.append("release")
-        return True
+        try:
+            if self.release_gate is not None:
+                await self.release_gate.wait()
+            if self.release_error is not None:
+                raise self.release_error
+            return True
+        finally:
+            self.release_finished.set()
+
+    async def renew_lock(
+        self,
+        document_id: UUID,
+        token: str,
+        *,
+        ttl_seconds: int,
+    ) -> StateTransition:
+        assert document_id == DOCUMENT_ID
+        assert token == LOCK_OWNER
+        assert ttl_seconds == self.lease_seconds
+        self.events.append("renew")
+        self.renewals += 1
+        self.renewal_seen.set()
+        if self.renewal_gate is not None:
+            await self.renewal_gate.wait()
+        if isinstance(self.renewal_result, Exception):
+            raise self.renewal_result
+        return self.renewal_result
 
     async def fail(
         self,
@@ -107,6 +142,9 @@ class FakeProcessor:
     results: list[ProcessingOutcome | BaseException]
     events: list[str] = field(default_factory=lambda: list[str]())
     attempts: list[int] = field(default_factory=lambda: list[int]())
+    gate: asyncio.Event | None = None
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def process(
         self,
@@ -119,10 +157,16 @@ class FakeProcessor:
         assert document_id == DOCUMENT_ID
         self.attempts.append(attempt)
         self.events.append(f"process:{attempt}")
-        result = self.results.pop(0)
-        if isinstance(result, BaseException):
-            raise result
-        return result
+        self.started.set()
+        try:
+            if self.gate is not None:
+                await self.gate.wait()
+            result = self.results.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        finally:
+            self.finished.set()
 
 
 def worker(
@@ -131,6 +175,7 @@ def worker(
     processor: FakeProcessor,
     *,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    renewal_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> DocumentWorker:
     return DocumentWorker(
         queue=queue,
@@ -143,12 +188,192 @@ def worker(
         reclaim_idle_ms=30_000,
         read_block_ms=50,
         batch_size=10,
-        lock_ttl_seconds=60,
+        lock_ttl_seconds=repository.lease_seconds,
         sleep=sleep,
+        renewal_sleep=renewal_sleep,
         random=lambda: 0,
         token_factory=lambda: LOCK_OWNER,
         clock=lambda: NOW,
     )
+
+
+class LeasePulse:
+    def __init__(self) -> None:
+        self.ticks: asyncio.Queue[None] = asyncio.Queue()
+        self.waiting = asyncio.Event()
+        self.cancelled = False
+        self.delays: list[float] = []
+
+    async def __call__(self, delay: float) -> None:
+        self.delays.append(delay)
+        self.waiting.set()
+        try:
+            await self.ticks.get()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        finally:
+            self.waiting.clear()
+
+
+@asynccontextmanager
+async def running_worker(instance: DocumentWorker) -> AsyncGenerator[asyncio.Task[int]]:
+    task = asyncio.create_task(instance.run_once())
+    try:
+        async with asyncio.timeout(3):
+            yield task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_lease_renews_while_processing_and_stops_after_completion() -> None:
+    queue, repository = FakeQueue(new=(MESSAGE,)), FakeRepository()
+    gate, pulse = asyncio.Event(), LeasePulse()
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED], gate=gate)
+    before = asyncio.all_tasks()
+    async with running_worker(worker(queue, repository, processor, renewal_sleep=pulse)) as task:
+        await processor.started.wait()
+        for expected in (1, 2):
+            repository.renewal_seen.clear()
+            pulse.ticks.put_nowait(None)
+            await repository.renewal_seen.wait()
+            assert repository.renewals == expected
+            assert not task.done()
+        gate.set()
+        await task
+    assert pulse.delays and all(delay == 20 for delay in pulse.delays)
+    assert pulse.cancelled
+    assert queue.events == ["group", "ack:1-0"]
+    assert asyncio.all_tasks() <= before
+
+
+@pytest.mark.asyncio
+async def test_lease_renews_during_retry_backoff() -> None:
+    queue, repository = FakeQueue(new=(MESSAGE,)), FakeRepository()
+    backoff, pulse = LeasePulse(), LeasePulse()
+    processor = FakeProcessor(
+        [
+            RetryableProcessingError("temporary", "Safe retry."),
+            ProcessingOutcome.COMPLETED,
+        ]
+    )
+    async with running_worker(
+        worker(
+            queue,
+            repository,
+            processor,
+            sleep=backoff,
+            renewal_sleep=pulse,
+        )
+    ) as task:
+        await backoff.waiting.wait()
+        pulse.ticks.put_nowait(None)
+        await repository.renewal_seen.wait()
+        assert processor.attempts == [1]
+        backoff.ticks.put_nowait(None)
+        await task
+    assert repository.renewals == 1
+    assert processor.attempts == [1, 2]
+    assert queue.events == ["group", "ack:1-0"]
+    assert pulse.cancelled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        StateTransition.LOST_OWNERSHIP,
+        StateTransition.NOT_FOUND,
+        StateTransition.ALREADY_TERMINAL,
+        InfrastructureUnavailableError("Document store"),
+        TimeoutError(),
+    ],
+)
+async def test_lease_rejection_stops_work_without_acknowledgement(
+    rejection: StateTransition | Exception,
+) -> None:
+    queue, pulse = FakeQueue(new=(MESSAGE,)), LeasePulse()
+    repository = FakeRepository(renewal_result=rejection)
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED], gate=asyncio.Event())
+    before = asyncio.all_tasks()
+    async with running_worker(worker(queue, repository, processor, renewal_sleep=pulse)) as task:
+        await processor.started.wait()
+        pulse.ticks.put_nowait(None)
+        await task
+    assert processor.finished.is_set()
+    assert processor.results == [ProcessingOutcome.COMPLETED]
+    assert repository.events[-1] == "release"
+    assert not any(event.startswith("fail:") for event in repository.events)
+    assert queue.events == ["group"]
+    assert asyncio.all_tasks() <= before
+
+
+@pytest.mark.asyncio
+async def test_lease_renewal_has_a_bounded_operation_timeout() -> None:
+    queue, pulse = FakeQueue(new=(MESSAGE,)), LeasePulse()
+    repository = FakeRepository(lease_seconds=1, renewal_gate=asyncio.Event())
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED], gate=asyncio.Event())
+    before = asyncio.all_tasks()
+    async with running_worker(worker(queue, repository, processor, renewal_sleep=pulse)) as task:
+        await processor.started.wait()
+        pulse.ticks.put_nowait(None)
+        await repository.renewal_seen.wait()
+        await task
+    assert processor.finished.is_set()
+    assert queue.events == ["group"]
+    assert asyncio.all_tasks() <= before
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_drains_lease_and_processing_tasks() -> None:
+    queue, repository, pulse = FakeQueue(new=(MESSAGE,)), FakeRepository(), LeasePulse()
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED], gate=asyncio.Event())
+    before = asyncio.all_tasks()
+    async with running_worker(worker(queue, repository, processor, renewal_sleep=pulse)) as task:
+        await processor.started.wait()
+        await pulse.waiting.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert pulse.cancelled
+    assert processor.finished.is_set()
+    assert repository.events == ["lock", "release"]
+    assert queue.events == ["group"]
+    assert asyncio.all_tasks() <= before
+
+
+@pytest.mark.asyncio
+async def test_lease_release_timeout_does_not_leave_an_owned_task() -> None:
+    queue = FakeQueue(new=(MESSAGE,))
+    repository = FakeRepository(lease_seconds=1, release_gate=asyncio.Event())
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED])
+    before = asyncio.all_tasks()
+    async with running_worker(worker(queue, repository, processor)) as task:
+        await task
+    assert repository.release_finished.is_set()
+    assert queue.events == ["group", "ack:1-0"]
+    assert asyncio.all_tasks() <= before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_lease_release_failure_does_not_mask_processing_outcome(cancelled: bool) -> None:
+    queue = FakeQueue(new=(MESSAGE,))
+    repository = FakeRepository(release_error=InfrastructureUnavailableError("Document store"))
+    processor = FakeProcessor(
+        [asyncio.CancelledError() if cancelled else ProcessingOutcome.COMPLETED]
+    )
+
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await worker(queue, repository, processor).run_once()
+    else:
+        await worker(queue, repository, processor).run_once()
+
+    assert queue.events == (["group"] if cancelled else ["group", "ack:1-0"])
+    assert repository.events == ["lock", "release"]
 
 
 @pytest.mark.asyncio

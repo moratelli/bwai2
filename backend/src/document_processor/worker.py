@@ -52,6 +52,14 @@ class WorkerRepository(Protocol):
 
     async def release_lock(self, document_id: UUID, token: str) -> bool: ...
 
+    async def renew_lock(
+        self,
+        document_id: UUID,
+        token: str,
+        *,
+        ttl_seconds: int,
+    ) -> StateTransition: ...
+
     async def fail(
         self,
         document_id: UUID,
@@ -92,6 +100,7 @@ class DocumentWorker:
         batch_size: int,
         lock_ttl_seconds: int,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        renewal_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random: Callable[[], float],
         token_factory: Callable[[], str] = lambda: str(uuid4()),
         clock: Callable[[], datetime] | None = None,
@@ -110,6 +119,8 @@ class DocumentWorker:
         self._batch_size = batch_size
         self._lock_ttl_seconds = lock_ttl_seconds
         self._sleep = sleep
+        self._renewal_sleep = renewal_sleep
+        self._renewal_interval = lock_ttl_seconds / 3
         self._random = random
         self._token_factory = token_factory
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -170,10 +181,60 @@ class DocumentWorker:
                 "attempt": max(message.delivery_count, 1),
             },
         )
+        processing = asyncio.create_task(self._process_with_retries(message, token))
+        renewal = asyncio.create_task(self._renew_lease(message, token))
         try:
-            await self._process_with_retries(message, token)
+            done, _ = await asyncio.wait(
+                {processing, renewal},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if processing in done:
+                await processing
+            else:
+                await renewal
         finally:
-            await asyncio.shield(self._repository.release_lock(message.document_id, token))
+            processing.cancel()
+            renewal.cancel()
+            await asyncio.gather(processing, renewal, return_exceptions=True)
+            try:
+                async with asyncio.timeout(min(5.0, self._renewal_interval)):
+                    await self._repository.release_lock(message.document_id, token)
+            except (InfrastructureUnavailableError, TimeoutError):
+                _LOGGER.warning(
+                    "document_lease_release_unavailable",
+                    extra={
+                        "event": "document_lease_release_unavailable",
+                        "document_id": str(message.document_id),
+                        "message_id": message.message_id,
+                    },
+                )
+
+    async def _renew_lease(self, message: StreamMessage, token: str) -> None:
+        while True:
+            await self._renewal_sleep(self._renewal_interval)
+            try:
+                async with asyncio.timeout(self._renewal_interval):
+                    result = await self._repository.renew_lock(
+                        message.document_id,
+                        token,
+                        ttl_seconds=self._lock_ttl_seconds,
+                    )
+            except (InfrastructureUnavailableError, TimeoutError):
+                reason = "renewal_unavailable"
+            else:
+                if result is StateTransition.APPLIED:
+                    continue
+                reason = result.value
+            _LOGGER.warning(
+                "document_lease_lost",
+                extra={
+                    "event": "document_lease_lost",
+                    "document_id": str(message.document_id),
+                    "message_id": message.message_id,
+                    "error_code": reason,
+                },
+            )
+            return
 
     async def _process_with_retries(self, message: StreamMessage, token: str) -> None:
         attempt = min(max(message.delivery_count, 1), self._max_attempts)
