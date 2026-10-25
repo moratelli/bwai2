@@ -6,9 +6,9 @@ from typing import Protocol, cast
 from google import genai
 from google.genai import types
 
-from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
+from document_processor.domain.errors import PermanentProcessingError
 from document_processor.domain.models import PageContent
-from document_processor.infrastructure.provider_errors import is_retryable_provider_error
+from document_processor.infrastructure.provider_errors import classify_gemini_error
 
 
 class GeminiSummaryResponse(Protocol):
@@ -165,7 +165,7 @@ class GeminiSummarizer:
                 config=types.GenerateContentConfig(temperature=0),
             )
         except Exception as error:
-            raise self._safe_provider_error(error) from error
+            raise classify_gemini_error(error, "summarization") from error
         candidates = response.candidates
         if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
             raise PermanentProcessingError(
@@ -179,17 +179,3 @@ class GeminiSummarizer:
                 "Gemini returned an invalid summary.",
             )
         return summary.strip()
-
-    @staticmethod
-    def _safe_provider_error(
-        error: Exception,
-    ) -> PermanentProcessingError | RetryableProcessingError:
-        if is_retryable_provider_error(error, "code", "status_code"):
-            return RetryableProcessingError(
-                "gemini_temporarily_unavailable",
-                "Gemini is temporarily unavailable.",
-            )
-        return PermanentProcessingError(
-            "gemini_rejected_document",
-            "Gemini could not summarize this document.",
-        )

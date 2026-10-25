@@ -124,7 +124,7 @@ Document the default request budget, coordination scope, supported retry hints, 
 - **Context:** absent in the bounded root/backend/frontend discovery of `CONTEXT.md` and `CONTEXT-MAP.md`.
 - **ADR:** absent in the bounded root/backend/frontend `docs/adr` discovery. No new ADR is proposed.
 - **Architecture:** no designated architecture authority, `ARCHITECTURE.md`, or `docs/architecture` was found in those roots. `openspec/config.yaml` specifies `spec-driven` and adds no authority/artifact rules.
-- **Approval:** `improve-gemini-resilience` is draft. The owner authorized planning; runtime changes and synchronization/archive require approval of the reviewed complete change.
+- **Approval:** The owner approved the complete change on 2026-10-25 after an Opus review returned no findings at `369c5f2`. Approval covers all tasks, verification, final review, synchronization/archive, PR creation, and squash merge after the gates. The exclusions below still apply.
 
 ## Migration Plan
 
