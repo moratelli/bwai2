@@ -120,6 +120,23 @@ Cancellation cannot revoke a provider request already sent. A crash or lost leas
 
 When upgrading from the earlier worker implementation, stop all old workers before starting the new version. Mixed worker versions are unsafe because the old code can still write without these guards. Keep Redis data and let pending jobs recover; do not delete locks to speed up a restart.
 
+Worker logs contain one JSON record per line. Correlation uses the last confirmed admitted attempt, not the stream delivery count. Missing fields are `null`, including for library records. The formatter excludes free-text messages, exception traces, tokens, filenames, document/provider payloads, and arbitrary extras. A synthetic example:
+
+```json
+{
+  "timestamp": "2026-10-24T12:00:00+00:00",
+  "level": "WARNING",
+  "logger": "document_processor.worker",
+  "event": "document_retry_scheduled",
+  "document_id": "00000000-0000-4000-8000-000000000001",
+  "message_id": "1-0",
+  "attempt": 1,
+  "outcome": null,
+  "error_code": "gemini_temporarily_unavailable",
+  "delay_seconds": 2.0
+}
+```
+
 ## Configuration
 
 `.env.example` contains every setting used by Compose. The main ones are:

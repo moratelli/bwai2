@@ -6,6 +6,7 @@ import socket
 
 from document_processor.config import Settings
 from document_processor.runtime import build_worker, create_redis
+from document_processor.worker_logging import configure_worker_logging
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,10 +35,7 @@ async def run_worker_pool(settings: Settings | None = None) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_worker_logging()
     asyncio.run(run_worker_pool())
 
 

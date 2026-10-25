@@ -1,8 +1,10 @@
 """Redis Streams worker behavior tests."""
 
 import asyncio
+import io
+import json
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,6 +22,7 @@ from document_processor.domain.models import AttemptAdmission, AttemptsExhausted
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
+from document_processor.worker_logging import SafeWorkerFormatter
 
 DOCUMENT_ID = UUID("00000000-0000-4000-8000-000000000001")
 NOW = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
@@ -399,6 +402,7 @@ async def test_lease_renews_during_retry_backoff() -> None:
 )
 async def test_lease_rejection_stops_work_without_acknowledgement(
     rejection: StateTransition | Exception,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     queue, pulse = FakeQueue(new=(MESSAGE,)), LeasePulse()
     repository = FakeRepository(renewal_result=rejection)
@@ -410,6 +414,11 @@ async def test_lease_rejection_stops_work_without_acknowledgement(
         await task
     assert processor.finished.is_set()
     assert processor.results == [ProcessingOutcome.COMPLETED]
+    lease_records = [
+        entry for entry in emitted_logs(caplog.records) if entry["event"] == "document_lease_lost"
+    ]
+    assert len(lease_records) == 1
+    assert lease_records[0]["attempt"] == 1
     assert repository.events[-1] == "release"
     assert not any(event.startswith("fail:") for event in repository.events)
     assert queue.events == ["group"]
@@ -625,6 +634,46 @@ async def test_terminal_redelivery_is_acknowledged_without_retry() -> None:
     assert queue.events[-1] == "ack:1-0"
 
 
+def emitted_logs(records: Sequence[logging.LogRecord]) -> list[Mapping[str, object]]:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(SafeWorkerFormatter())
+    for record in records:
+        handler.handle(record)
+    result: list[Mapping[str, object]] = []
+    for line in stream.getvalue().splitlines():
+        value: object = json.loads(line)
+        assert isinstance(value, dict)
+        result.append(cast(Mapping[str, object], value))
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "event"),
+    [
+        (ProcessingOutcome.COMPLETED, "document_processing_completed"),
+        (ProcessingOutcome.FAILED, "document_processing_failed"),
+        (ProcessingOutcome.ALREADY_TERMINAL, "document_already_terminal"),
+        (ProcessingOutcome.NOT_FOUND, "document_not_found"),
+        (ProcessingOutcome.LOST_OWNERSHIP, "document_ownership_lost"),
+    ],
+)
+async def test_terminal_logs_name_the_actual_processing_outcome(
+    outcome: ProcessingOutcome,
+    event: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="document_processor.worker"):
+        await worker(
+            FakeQueue(new=(MESSAGE,)), FakeRepository(), FakeProcessor([outcome])
+        ).run_once()
+    emitted = emitted_logs(caplog.records)
+    assert emitted[-1]["event"] == event
+    assert emitted[-1]["outcome"] == outcome.value
+    assert emitted[-1]["attempt"] == 1
+
+
 @pytest.mark.asyncio
 async def test_emits_structured_content_safe_lifecycle_logs(
     caplog: pytest.LogCaptureFixture,
@@ -647,7 +696,7 @@ async def test_emits_structured_content_safe_lifecycle_logs(
     worker_records = [
         record for record in caplog.records if record.name == "document_processor.worker"
     ]
-    record_data = [cast(Mapping[str, object], vars(record)) for record in worker_records]
+    record_data = emitted_logs(worker_records)
     assert [data.get("event") for data in record_data] == [
         "document_processing_started",
         "document_retry_scheduled",

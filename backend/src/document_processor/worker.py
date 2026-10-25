@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -17,6 +18,11 @@ from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _AttemptLogContext:
+    attempt: int | None = None
 
 
 class WorkerQueue(Protocol):
@@ -181,8 +187,9 @@ class DocumentWorker:
                 },
             )
             return
-        processing = asyncio.create_task(self._process_with_retries(message, token))
-        renewal = asyncio.create_task(self._renew_lease(message, token))
+        context = _AttemptLogContext()
+        processing = asyncio.create_task(self._process_with_retries(message, token, context))
+        renewal = asyncio.create_task(self._renew_lease(message, token, context))
         try:
             done, _ = await asyncio.wait(
                 {processing, renewal},
@@ -206,10 +213,16 @@ class DocumentWorker:
                         "event": "document_lease_release_unavailable",
                         "document_id": str(message.document_id),
                         "message_id": message.message_id,
+                        "attempt": context.attempt,
                     },
                 )
 
-    async def _renew_lease(self, message: StreamMessage, token: str) -> None:
+    async def _renew_lease(
+        self,
+        message: StreamMessage,
+        token: str,
+        context: _AttemptLogContext,
+    ) -> None:
         while True:
             await self._renewal_sleep(self._renewal_interval)
             try:
@@ -232,11 +245,17 @@ class DocumentWorker:
                     "document_id": str(message.document_id),
                     "message_id": message.message_id,
                     "error_code": reason,
+                    "attempt": context.attempt,
                 },
             )
             return
 
-    async def _process_with_retries(self, message: StreamMessage, token: str) -> None:
+    async def _process_with_retries(
+        self,
+        message: StreamMessage,
+        token: str,
+        context: _AttemptLogContext,
+    ) -> None:
         while True:
             try:
                 admission = await self._repository.admit_attempt(
@@ -260,6 +279,7 @@ class DocumentWorker:
                     await self._queue.acknowledge(message.message_id)
                 return
             if isinstance(admission, AttemptsExhausted):
+                context.attempt = admission.attempts
                 await self._publish_failure(
                     message,
                     token,
@@ -271,6 +291,7 @@ class DocumentWorker:
                 )
                 return
             attempt = admission
+            context.attempt = attempt
             _LOGGER.info(
                 "document_processing_started",
                 extra={
@@ -320,12 +341,20 @@ class DocumentWorker:
                 )
                 return
             else:
-                event = (
-                    "document_ownership_lost"
-                    if outcome is ProcessingOutcome.LOST_OWNERSHIP
-                    else "document_processing_completed"
+                event = {
+                    ProcessingOutcome.COMPLETED: "document_processing_completed",
+                    ProcessingOutcome.FAILED: "document_processing_failed",
+                    ProcessingOutcome.ALREADY_TERMINAL: "document_already_terminal",
+                    ProcessingOutcome.NOT_FOUND: "document_not_found",
+                    ProcessingOutcome.LOST_OWNERSHIP: "document_ownership_lost",
+                }[outcome]
+                level = (
+                    logging.WARNING
+                    if outcome in {ProcessingOutcome.FAILED, ProcessingOutcome.LOST_OWNERSHIP}
+                    else logging.INFO
                 )
-                _LOGGER.info(
+                _LOGGER.log(
+                    level,
                     event,
                     extra={
                         "event": event,
