@@ -1,0 +1,127 @@
+{
+  "source_commit": "83f27e308a3f644c73f392583f2cb141e7c978fd",
+  "model": "gemini-3.1-flash-lite",
+  "test_summarizer_enabled": false,
+  "processing_attempt_limit": 1,
+  "gemini_extraction_and_summary": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "stack_started",
+        "passed": true
+      },
+      {
+        "name": "real_worker_mode",
+        "passed": true
+      },
+      {
+        "name": "isolated_binding",
+        "passed": true
+      },
+      {
+        "name": "api_ready",
+        "passed": true
+      },
+      {
+        "name": "upload_accepted",
+        "passed": true
+      },
+      {
+        "name": "document_result",
+        "passed": true
+      },
+      {
+        "name": "result_status",
+        "passed": true
+      },
+      {
+        "name": "page_structure",
+        "passed": true
+      },
+      {
+        "name": "page_0_north_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_0_south_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_0_total_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_1_operating_costs",
+        "passed": true
+      },
+      {
+        "name": "page_1_operating_profit",
+        "passed": true
+      },
+      {
+        "name": "summary_total_revenue",
+        "passed": true
+      },
+      {
+        "name": "summary_operating_profit",
+        "passed": true
+      },
+      {
+        "name": "factual_quality",
+        "passed": true
+      },
+      {
+        "name": "owned_cleanup",
+        "passed": true
+      }
+    ]
+  },
+  "pypdf_extraction_and_gemini_summary": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "result_status",
+        "passed": true
+      },
+      {
+        "name": "page_structure",
+        "passed": true
+      },
+      {
+        "name": "page_0_north_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_0_south_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_0_total_revenue",
+        "passed": true
+      },
+      {
+        "name": "page_1_operating_costs",
+        "passed": true
+      },
+      {
+        "name": "page_1_operating_profit",
+        "passed": true
+      },
+      {
+        "name": "summary_total_revenue",
+        "passed": true
+      },
+      {
+        "name": "summary_operating_profit",
+        "passed": true
+      }
+    ]
+  },
+  "one_page_gemini_smoke": {
+    "passed": true,
+    "processingAttempts": 1,
+    "pageCount": 1
+  },
+  "owned_resources_removed": true,
+  "scope": "Recorded live checks on synthetic one- and two-page PDFs. The two-page checks validate selected labelled facts, not general OCR, layout or large-document quality. These provider checks were not rerun for the PR description update."
+}
