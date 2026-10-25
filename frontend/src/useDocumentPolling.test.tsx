@@ -204,6 +204,52 @@ describe("useDocumentPolling", () => {
     expect(result.current.pollError).toBeNull();
   });
 
+  it("continues polling a recorded retry through a transport error and resumed processing", async () => {
+    const waiting: DocumentResource = {
+      ...first,
+      status: "processing",
+      updated_at: first.created_at,
+      attempts: 1,
+      retry_wait: {
+        until: "2026-10-25T18:01:00Z",
+        cause: {
+          provider: "gemini",
+          category: "unavailable",
+          stage: "summarization",
+          attempt: 1,
+          http_status: 503,
+        },
+      },
+    };
+    const getDocument = vi
+      .fn<DocumentReader["getDocument"]>()
+      .mockResolvedValueOnce(waiting)
+      .mockRejectedValueOnce(new Error("Temporary poll failure"))
+      .mockResolvedValueOnce({
+        ...first,
+        status: "processing",
+        updated_at: first.created_at,
+        attempts: 2,
+      })
+      .mockResolvedValueOnce(resource(first, "completed"));
+    const { result } = renderHook(() => useDocumentPolling({ getDocument }), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.track([first]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents[0]).toEqual(waiting);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents[0]).toEqual(waiting);
+    expect(result.current.pollError).toContain("Retrying");
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(result.current.documents[0]).not.toHaveProperty("retry_wait");
+    expect(result.current.documents[0]?.status).toBe("processing");
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents[0]?.status).toBe("completed");
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(getDocument).toHaveBeenCalledTimes(4);
+  });
+
   it("aborts requests and clears timers on unmount", async () => {
     let signal: AbortSignal | undefined;
     const getDocument = vi.fn(

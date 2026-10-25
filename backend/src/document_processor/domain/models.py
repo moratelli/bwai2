@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from document_processor.domain.provider import AttemptFailure, RetrySchedule
+
 
 class ParserKind(StrEnum):
     PYPDF = "pypdf"
@@ -28,9 +30,16 @@ class StateTransition(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AttemptsExhausted:
     attempts: int
+    last_failure: AttemptFailure | None = None
 
 
-type AttemptAdmission = int | AttemptsExhausted | StateTransition
+@dataclass(frozen=True, slots=True)
+class RetryWaiting:
+    attempts: int
+    schedule: RetrySchedule
+
+
+type AttemptAdmission = int | AttemptsExhausted | RetryWaiting | StateTransition
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,3 +88,5 @@ class DocumentRecord:
     error_code: str | None = None
     error_message: str | None = None
     completed_at: datetime | None = None
+    last_failure: AttemptFailure | None = None
+    retry_not_before: datetime | None = None

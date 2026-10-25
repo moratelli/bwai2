@@ -42,6 +42,16 @@ Summarization also rejects a consumed response marked `MAX_TOKENS`, even if it c
 
 These diagnostics apply to new processing after the worker is updated. Existing failed records keep their stored message.
 
+### Gemini request budget
+
+Every production extraction, summary chunk, reduction, and synthesis request passes through a Redis admission gate. The default is 12 requests per minute, spaced at least five seconds apart at admission. SDK automatic retries are disabled so they cannot bypass that accounting. Local PyPDF extraction and the test summarizer do not consume permits.
+
+Cooperating workers must share Redis, model, `GEMINI_RATE_LIMIT_SCOPE`, and the configured RPM. A conflicting budget or uncertain Redis operation fails closed. Waiting clients recheck the gate instead of reserving future slots, and restarts do not reset it. When changing a scope's budget, stop its workers and allow its admission/cooldown state to expire before starting the matching configuration. Never change scopes to evade an active cooldown.
+
+A confirmed retryable provider failure extends a shared cooldown, even when that document has exhausted its attempts. Backoff starts at 15 seconds, doubles by admitted attempt, and caps its exponential component at 60 seconds. The worker adds up to five seconds of jitter. Numeric or HTTP-date `Retry-After` and `google.rpc.RetryInfo` delays up to one day can extend the wait; the exponential cap never shortens a supported hint. Malformed, negative, non-finite, or longer hints use fallback backoff. Already-sent requests can finish; later admissions wait and recheck.
+
+This is application admission pacing, not a guarantee about request arrival times or provider availability. Other clients and separate Redis deployments can still consume the project's quota. The app does not proactively enforce input-token or daily quotas. It records returned token usage when available; missing usage is unknown, not zero.
+
 ### Why Mistral OCR was removed
 
 Mistral OCR was removed because the available free Mistral Studio account had zero execution quota. The API key authenticated, but OCR requests returned HTTP 429 with an allowed rate of zero requests per minute. We therefore could not run and verify the integration and retained PyPDF and Gemini.
@@ -87,6 +97,16 @@ Readiness does not contact Gemini. A `configured` result means a key was supplie
 
 FastAPI owns the OpenAPI contract. The generated schema lives at `frontend/openapi.json`; `openapi-typescript` turns it into `frontend/src/generated/api.ts`. Runtime parsing in the frontend still validates untrusted JSON before it enters Jotai state.
 
+### Retry information in results
+
+A processing result can include `retry_wait.until` and `retry_wait.cause`. The timestamp is a not-before time, not a promise that a request will start then. The cause identifies Gemini, the extraction or summarization stage, the failed attempt, and one of `rate_limited`, `unavailable`, `timeout`, `connection_error`, or `temporary_failure`. A known HTTP status is included; missing status information is not inferred.
+
+An exhausted result keeps `error.code: retry_exhausted` and can include the same cause under `error.cause`. Compare its `attempt` with the document's `attempts`: an earlier value is last-confirmed evidence, not a diagnosis of the interrupted final attempt. Permanent document errors keep their existing messages without an unrelated provider cause.
+
+These fields are optional. Legacy results remain valid, resumed attempts omit their old wait, and terminal results have no wait. The browser accepts absent or null metadata; malformed metadata triggers its normal polling-error handling rather than becoming provider evidence. Submission, readiness, and lookup error envelopes are unchanged.
+
+The Results summary counts completed, failed, active, and unavailable documents currently shown, including earlier submissions on that page. Queued jobs and scheduled retries remain active. Temporary polling errors preserve the cards and counts. Retry cards show a fixed not-before timestamp rather than a countdown or a promise of immediate processing. The scripted `retry-feedback.e2e.ts` browser scenario verifies this presentation with intercepted synthetic responses; it does not test live Gemini availability.
+
 ## Architecture and Redis flow
 
 ```text
@@ -122,6 +142,10 @@ The retry budget counts attempts admitted in a Redis transaction, not stream del
 
 State changes check the current lease owner and the live document record in the same Redis transaction. Terminal writes also check the processing attempt. A stale worker cannot overwrite a result, delete another worker's source, or recreate an expired record. Processing does not extend the original retention deadline.
 
+Retry storage uses those same owner and attempt checks. A future retry deadline defers admission without incrementing the counter; Redis server time decides when it is due. Admission clears the deadline but retains the attempt-tagged last failure. A later infrastructure failure replaces earlier Gemini attribution. Completion clears all retry evidence, permanent failure clears unrelated evidence, and exhaustion retains the last confirmed context. Missing or malformed optional metadata does not manufacture a cause or break legacy records.
+
+The worker records each caught retryable failure before sleeping or publishing exhaustion. A rejected or uncertain record write leaves unfinished work pending. Replacement workers honor saved waits, and an exhausted job does not make a fourth processing call. If the final failure was saved before a crash, recovery uses it; if only an earlier failure was saved, the message explicitly says "Last confirmed failure on attempt N." A crash before the write can lose that in-memory evidence, so older failures without trustworthy context stay generic.
+
 The worker renews its lease every third of its configured lifetime, including while waiting between retries. If renewal fails or cannot be confirmed within that interval, it cancels local processing and leaves unfinished work pending. Cleanup cancels and awaits the owned tasks and bounds lease release to at most five seconds. A failed release is logged without replacing the original processing or cancellation outcome.
 
 Cancellation cannot revoke a provider request already sent. A crash or lost lease can still lead to repeated provider calls; the ownership checks protect stored results, not exactly-once execution.
@@ -141,9 +165,18 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
   "attempt": 1,
   "outcome": null,
   "error_code": "gemini_temporarily_unavailable",
-  "delay_seconds": 2.0
+  "delay_seconds": 15.0,
+  "provider": null,
+  "provider_category": null,
+  "provider_stage": null,
+  "http_status": null,
+  "duration_ms": null,
+  "prompt_token_count": null,
+  "candidates_token_count": null
 }
 ```
+
+`gemini_request_completed` and `gemini_request_failed` events report the stage, duration, known HTTP status, and safe provider category when available. Completed requests can include returned prompt/output token counts. These events can lack document context; they never include prompts, generated text, raw headers, or provider response bodies.
 
 ## Configuration
 
@@ -154,11 +187,16 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
 | `APP_PORT` | `8080` | Localhost port for Nginx |
 | `GEMINI_API_KEY` | empty | Required for normal submissions and all normal summaries |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Gemini extraction and summary model |
+| `GEMINI_REQUESTS_PER_MINUTE` | `12` | Shared generation admission budget, 1–1000 |
+| `GEMINI_RATE_LIMIT_SCOPE` | `bwai2` | Nonsecret shared label: 1–64 ASCII letters, digits, `_` or `-` |
 | `DOCUMENT_TTL_SECONDS` | `86400` | Redis retention for document records |
 | `MAX_FILES_PER_BATCH` | `10` | Atomic batch limit |
 | `MAX_FILE_SIZE_BYTES` | `20971520` | Per-file limit, 20 MiB by default |
 | `WORKER_CONCURRENCY` | `2` | Consumers in the worker process |
 | `WORKER_MAX_ATTEMPTS` | `3` | Retry ceiling for temporary failures |
+| `WORKER_RETRY_BASE_SECONDS` | `15` | Initial exponential backoff |
+| `WORKER_RETRY_MAX_SECONDS` | `60` | Exponential component cap; does not cap supported provider hints |
+| `WORKER_RETRY_JITTER_SECONDS` | `5` | Maximum additive jitter |
 
 The Gemini key is a runtime variable. It is not copied into images, exposed to Vite, or included in tracked files.
 
@@ -277,7 +315,7 @@ This is a take-home service, not a multi-tenant document platform.
 - Redis is both the queue and temporary record store; data expires rather than moving to durable object storage.
 - The API holds each bounded upload in memory before the atomic Redis transaction.
 - Result delivery uses polling, not WebSockets or server-sent events.
-- There is no authentication, rate limiting, malware scanning, or per-user isolation.
+- There is no authentication, incoming API rate limiting, malware scanning, or per-user isolation.
 - PyPDF does not OCR image-only pages. Rich Markdown uses Gemini's visual PDF processing, but scan quality can limit extraction.
 - Local records from an older parser configuration are not migrated. Start a new test stack, or remove old Redis data only when it is disposable.
 - Provider-backed results depend on external availability and credentials. The smoke summarizer proves orchestration only; it is not a production fallback.

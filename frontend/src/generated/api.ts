@@ -168,6 +168,14 @@ export interface components {
     ErrorResponse: {
       error: components["schemas"]["ErrorDetail"];
     };
+    /** FailedDocumentError */
+    FailedDocumentError: {
+      cause?: components["schemas"]["ProviderCauseResponse"] | null;
+      /** Code */
+      code: string;
+      /** Message */
+      message: string;
+    };
     /** FailedDocumentResponse */
     FailedDocumentResponse: {
       /** Attempts */
@@ -182,7 +190,7 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
-      error: components["schemas"]["ErrorDetail"];
+      error: components["schemas"]["FailedDocumentError"];
       /** Filename */
       filename: string;
       /**
@@ -244,6 +252,7 @@ export interface components {
        */
       id: string;
       parser: components["schemas"]["ParserKind"];
+      retry_wait?: components["schemas"]["RetryWaitResponse"] | null;
       /**
        * @description discriminator enum property added by openapi-typescript
        * @enum {string}
@@ -254,6 +263,33 @@ export interface components {
        * Format: date-time
        */
       updated_at: string;
+    };
+    /** ProviderCauseResponse */
+    ProviderCauseResponse: {
+      /** Attempt */
+      attempt: number;
+      /**
+       * Category
+       * @enum {string}
+       */
+      category:
+        | "rate_limited"
+        | "unavailable"
+        | "timeout"
+        | "connection_error"
+        | "temporary_failure";
+      /** Http Status */
+      http_status?: number | null;
+      /**
+       * Provider
+       * @constant
+       */
+      provider: "gemini";
+      /**
+       * Stage
+       * @enum {string}
+       */
+      stage: "extraction" | "summarization";
     };
     /** QueuedDocumentResponse */
     QueuedDocumentResponse: {
@@ -294,6 +330,15 @@ export interface components {
        * @enum {string}
        */
       status: "ok" | "unhealthy";
+    };
+    /** RetryWaitResponse */
+    RetryWaitResponse: {
+      cause: components["schemas"]["ProviderCauseResponse"];
+      /**
+       * Until
+       * Format: date-time
+       */
+      until: string;
     };
     /** ValidationError */
     ValidationError: {

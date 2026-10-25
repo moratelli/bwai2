@@ -197,6 +197,7 @@ def create_app(
     @app.get(
         "/api/v1/documents/{document_id}",
         response_model=DocumentResponse,
+        response_model_exclude_none=True,
         responses={
             404: {"model": ErrorResponse},
             503: {"model": ErrorResponse},

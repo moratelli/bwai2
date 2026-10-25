@@ -9,6 +9,8 @@ export type AcceptedDocument = Omit<GeneratedAcceptedDocument, "status"> & {
 export type PageContent = components["schemas"]["PageResponse"];
 export type CompletedDocument = components["schemas"]["CompletedDocumentResponse"];
 export type FailedDocument = components["schemas"]["FailedDocumentResponse"];
+export type ProviderCause = components["schemas"]["ProviderCauseResponse"];
+export type RetryWait = components["schemas"]["RetryWaitResponse"];
 export type DocumentResource = components["schemas"]["DocumentResponse"];
 export type UnavailableDocument = Omit<AcceptedDocument, "status"> & {
   status: "unavailable";
@@ -113,15 +115,24 @@ function parseDocument(value: unknown): DocumentResource {
     attempts: number(item, "attempts"),
   };
   const status = documentStatus(item.status);
-  if (status === "queued" || status === "processing") return { ...base, status };
+  if (status === "queued") return { ...base, status };
+  if (status === "processing") {
+    const retry_wait = parseRetryWait(item.retry_wait, base.attempts);
+    if (item.retry_wait != null && !retry_wait) invalidResponse();
+    return { ...base, status, ...(retry_wait ? { retry_wait } : {}) };
+  }
   const completed_at = string(item, "completed_at");
   if (status === "failed") {
     const error = record(item.error);
+    const code = string(error, "code");
+    const cause =
+      code === "retry_exhausted" ? parseProviderCause(error.cause, base.attempts) : undefined;
+    if (code === "retry_exhausted" && error.cause != null && !cause) invalidResponse();
     return {
       ...base,
       status,
       completed_at,
-      error: { code: string(error, "code"), message: string(error, "message") },
+      error: { code, message: string(error, "message"), ...(cause ? { cause } : {}) },
     };
   }
   if (!Array.isArray(item.pages)) invalidResponse();
@@ -135,6 +146,83 @@ function parseDocument(value: unknown): DocumentResource {
     }),
     summary: string(item, "summary"),
   };
+}
+
+function parseProviderCause(value: unknown, attempts: number): ProviderCause | undefined {
+  const item = optionalRecord(value);
+  if (!item || item.provider !== "gemini") return undefined;
+  const { category, stage, attempt, http_status } = item;
+  if (
+    category !== "rate_limited" &&
+    category !== "unavailable" &&
+    category !== "timeout" &&
+    category !== "connection_error" &&
+    category !== "temporary_failure"
+  )
+    return undefined;
+  if (stage !== "extraction" && stage !== "summarization") return undefined;
+  if (
+    typeof attempt !== "number" ||
+    !Number.isSafeInteger(attempt) ||
+    attempt < 1 ||
+    attempt > attempts
+  )
+    return undefined;
+  if (http_status != null) {
+    if (
+      typeof http_status !== "number" ||
+      !Number.isInteger(http_status) ||
+      http_status < 100 ||
+      http_status > 599
+    )
+      return undefined;
+    if (category === "rate_limited" && http_status !== 429) return undefined;
+    if (category === "unavailable" && http_status < 500) return undefined;
+    if (category === "temporary_failure" && http_status !== 408 && http_status !== 409)
+      return undefined;
+    if (
+      (category === "timeout" || category === "connection_error") &&
+      (http_status === 429 || http_status >= 500)
+    )
+      return undefined;
+  }
+  return {
+    provider: "gemini",
+    category,
+    stage,
+    attempt,
+    ...(http_status != null ? { http_status: http_status as number } : {}),
+  };
+}
+
+function parseRetryWait(value: unknown, attempts: number): RetryWait | undefined {
+  const item = optionalRecord(value);
+  if (!item || !validRetryTime(item.until)) return undefined;
+  const cause = parseProviderCause(item.cause, attempts);
+  if (!cause || cause.attempt !== attempts) return undefined;
+  return { until: item.until, cause };
+}
+
+function validRetryTime(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+    value,
+  );
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [year, month, day] = match.slice(1, 4).map(Number);
+  return (
+    year > 0 &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= new Date(Date.UTC(year, month, 0)).getUTCDate()
+  );
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function parseApiError(status: number, value: unknown): ApiError {

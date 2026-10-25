@@ -107,6 +107,13 @@ def test_emits_only_safe_correlation_fields(
         "outcome",
         "error_code",
         "delay_seconds",
+        "provider",
+        "provider_category",
+        "provider_stage",
+        "http_status",
+        "duration_ms",
+        "prompt_token_count",
+        "candidates_token_count",
     }
 
 
@@ -131,6 +138,34 @@ def test_context_free_library_record_uses_safe_defaults(
     assert payload["document_id"] is None
     assert payload["message_id"] is None
     assert payload["attempt"] is None
+    assert "CANARY" not in output
+
+
+def test_untrusted_provider_metadata_is_not_serialized(worker_formatter: logging.Formatter) -> None:
+    output, payload = emit(
+        worker_formatter,
+        logging.makeLogRecord(
+            {
+                "provider": "PRIVATE_CANARY",
+                "provider_category": "PRIVATE_CANARY",
+                "provider_stage": "PRIVATE_CANARY",
+                "http_status": True,
+                "duration_ms": float("nan"),
+                "prompt_token_count": -1,
+                "candidates_token_count": "CANARY",
+            }
+        ),
+    )
+    for name in (
+        "provider",
+        "provider_category",
+        "provider_stage",
+        "http_status",
+        "duration_ms",
+        "prompt_token_count",
+        "candidates_token_count",
+    ):
+        assert payload[name] is None
     assert "CANARY" not in output
 
 

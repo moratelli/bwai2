@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 from document_processor.api.app import create_app
 from document_processor.config import Settings
 from document_processor.domain.models import ParserKind
+from document_processor.infrastructure.gemini_rate_gate import RedisGeminiRateGate
 from document_processor.infrastructure.parsers.gemini_parser import GeminiPdfParser
 from document_processor.infrastructure.parsers.pypdf_parser import PyPdfParser
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
@@ -73,6 +74,12 @@ def build_worker(
     if settings.gemini_api_key is None and not settings.test_summarizer_enabled:
         raise RuntimeError("GEMINI_API_KEY is required by the document worker")
 
+    provider_gate = RedisGeminiRateGate(
+        redis,
+        scope=settings.gemini_rate_limit_scope,
+        model=settings.gemini_model,
+        requests_per_minute=settings.gemini_requests_per_minute,
+    )
     parsers: dict[ParserKind, DocumentParser] = {
         ParserKind.PYPDF: PyPdfParser(),
     }
@@ -83,6 +90,7 @@ def build_worker(
         parsers[ParserKind.GEMINI] = GeminiPdfParser(
             model=settings.gemini_model,
             api_key=gemini_key,
+            request_gate=provider_gate,
         )
 
     summarizer: DocumentSummarizer
@@ -93,6 +101,7 @@ def build_worker(
             model=settings.gemini_model,
             chunk_size=settings.summary_chunk_characters,
             api_key=gemini_key,
+            request_gate=provider_gate,
         )
     else:
         raise RuntimeError("GEMINI_API_KEY is required by the document worker")
@@ -114,8 +123,10 @@ def build_worker(
         repository=repository,
         processor=processor,
         consumer_name=consumer_name,
+        provider_gate=provider_gate,
         max_attempts=settings.worker_max_attempts,
         retry_base_seconds=settings.worker_retry_base_seconds,
+        retry_max_seconds=settings.worker_retry_max_seconds,
         retry_jitter_seconds=settings.worker_retry_jitter_seconds,
         reclaim_idle_ms=settings.worker_reclaim_idle_ms,
         read_block_ms=settings.worker_read_block_ms,

@@ -187,6 +187,32 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "FailedDocumentError": {
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderCauseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "title": "FailedDocumentError",
+        "type": "object"
+      },
       "FailedDocumentResponse": {
         "additionalProperties": false,
         "properties": {
@@ -205,7 +231,7 @@
             "type": "string"
           },
           "error": {
-            "$ref": "#/components/schemas/ErrorDetail"
+            "$ref": "#/components/schemas/FailedDocumentError"
           },
           "filename": {
             "title": "Filename",
@@ -315,6 +341,16 @@
           "parser": {
             "$ref": "#/components/schemas/ParserKind"
           },
+          "retry_wait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryWaitResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "const": "processing",
             "title": "Status",
@@ -328,6 +364,53 @@
         },
         "required": ["id", "filename", "parser", "created_at", "updated_at", "attempts", "status"],
         "title": "ProcessingDocumentResponse",
+        "type": "object"
+      },
+      "ProviderCauseResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "exclusiveMinimum": 0.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "category": {
+            "enum": [
+              "rate_limited",
+              "unavailable",
+              "timeout",
+              "connection_error",
+              "temporary_failure"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "maximum": 599.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "provider": {
+            "const": "gemini",
+            "title": "Provider",
+            "type": "string"
+          },
+          "stage": {
+            "enum": ["extraction", "summarization"],
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": ["provider", "category", "stage", "attempt"],
+        "title": "ProviderCauseResponse",
         "type": "object"
       },
       "QueuedDocumentResponse": {
@@ -387,6 +470,22 @@
         },
         "required": ["status", "checks"],
         "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "RetryWaitResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/ProviderCauseResponse"
+          },
+          "until": {
+            "format": "date-time",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": ["until", "cause"],
+        "title": "RetryWaitResponse",
         "type": "object"
       },
       "ValidationError": {

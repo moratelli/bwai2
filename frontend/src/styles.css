@@ -353,6 +353,30 @@ h1 {
   text-transform: uppercase;
 }
 
+.retry-block {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border: 1px solid #dfca8f;
+  border-radius: 0.85rem;
+  background: #fff7de;
+  color: #614c13;
+  line-height: 1.5;
+}
+
+.retry-block h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+.retry-block p {
+  margin: 0.4rem 0 0;
+}
+
+.cause-details {
+  margin-bottom: 0.6rem;
+  overflow-wrap: anywhere;
+}
+
 .summary-block {
   margin-top: 1.2rem;
 }
