@@ -5,7 +5,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -311,8 +311,10 @@ class DocumentWorker:
                     token,
                     admission.attempts,
                     error_code="retry_exhausted",
-                    error_message=(
-                        f"Processing reached the retry limit ({self._max_attempts} attempts)."
+                    error_message=self._exhaustion_message(
+                        admission.attempts,
+                        admission.last_failure,
+                        recovered=True,
                     ),
                 )
                 return
@@ -335,11 +337,13 @@ class DocumentWorker:
                 )
             except (RetryableProcessingError, InfrastructureUnavailableError) as error:
                 delay = self._retry_delay(attempt, error)
+                not_before = self._clock() + timedelta(seconds=delay)
                 info = error.provider_info if isinstance(error, RetryableProcessingError) else None
                 if info is not None and self._provider_gate is not None:
                     try:
                         schedule = await self._provider_gate.cool_down(delay)
                         delay = schedule.delay_seconds
+                        not_before = schedule.not_before
                     except InfrastructureUnavailableError:
                         _LOGGER.warning(
                             "document_cooldown_unavailable",
@@ -352,13 +356,38 @@ class DocumentWorker:
                             },
                         )
                         return
+                failure = AttemptFailure(attempt, info)
+                try:
+                    recorded = await self._repository.record_retry_failure(
+                        message.document_id,
+                        token=token,
+                        failure=failure,
+                        retry_not_before=not_before if attempt < self._max_attempts else None,
+                        updated_at=self._clock(),
+                    )
+                except InfrastructureUnavailableError:
+                    _LOGGER.warning(
+                        "document_retry_state_unavailable",
+                        extra={
+                            "event": "document_retry_state_unavailable",
+                            "document_id": str(message.document_id),
+                            "message_id": message.message_id,
+                            "attempt": attempt,
+                            "error_code": "infrastructure_unavailable",
+                        },
+                    )
+                    return
+                if recorded is not StateTransition.APPLIED:
+                    if recorded in {StateTransition.NOT_FOUND, StateTransition.ALREADY_TERMINAL}:
+                        await self._queue.acknowledge(message.message_id)
+                    return
                 if attempt >= self._max_attempts:
                     await self._publish_failure(
                         message,
                         token,
                         attempt,
                         error_code="retry_exhausted",
-                        error_message=f"Processing failed after {self._max_attempts} attempts.",
+                        error_message=self._exhaustion_message(attempt, failure),
                     )
                     return
                 _LOGGER.warning(
@@ -418,6 +447,33 @@ class DocumentWorker:
                 }:
                     await self._queue.acknowledge(message.message_id)
                 return
+
+    def _exhaustion_message(
+        self,
+        attempt: int,
+        failure: AttemptFailure | None,
+        *,
+        recovered: bool = False,
+    ) -> str:
+        prefix = (
+            f"Processing reached the retry limit ({self._max_attempts} attempts)."
+            if recovered
+            else f"Processing failed after {self._max_attempts} attempts."
+        )
+        if failure is None or failure.provider_info is None:
+            return prefix
+        info = failure.provider_info
+        reason = {
+            "rate_limited": "Gemini API limit reached",
+            "unavailable": "Gemini was temporarily unavailable",
+            "timeout": "Gemini timed out",
+            "connection_error": "The connection to Gemini failed",
+            "temporary_failure": "Gemini had a temporary failure",
+        }[info.category]
+        detail = f"{reason} during {info.stage}."
+        if failure.attempt < attempt:
+            detail = f"Last confirmed failure on attempt {failure.attempt}: {detail}"
+        return f"{prefix} {detail}"
 
     def _retry_delay(
         self, attempt: int, error: RetryableProcessingError | InfrastructureUnavailableError
