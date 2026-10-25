@@ -14,7 +14,13 @@ from document_processor.domain.errors import (
     PermanentProcessingError,
     RetryableProcessingError,
 )
-from document_processor.domain.models import AttemptAdmission, AttemptsExhausted, StateTransition
+from document_processor.domain.models import (
+    AttemptAdmission,
+    AttemptsExhausted,
+    RetryWaiting,
+    StateTransition,
+)
+from document_processor.domain.provider import AttemptFailure
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.ports import ProviderRequestGate
 from document_processor.services.processing import ProcessingOutcome
@@ -50,6 +56,16 @@ class WorkerQueue(Protocol):
 
 
 class WorkerRepository(Protocol):
+    async def record_retry_failure(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        failure: AttemptFailure,
+        retry_not_before: datetime | None,
+        updated_at: datetime,
+    ) -> StateTransition: ...
+
     async def admit_attempt(
         self,
         document_id: UUID,
@@ -284,6 +300,10 @@ class DocumentWorker:
                 if admission in {StateTransition.NOT_FOUND, StateTransition.ALREADY_TERMINAL}:
                     await self._queue.acknowledge(message.message_id)
                 return
+            if isinstance(admission, RetryWaiting):
+                context.attempt = admission.attempts
+                await self._sleep(admission.schedule.delay_seconds)
+                continue
             if isinstance(admission, AttemptsExhausted):
                 context.attempt = admission.attempts
                 await self._publish_failure(

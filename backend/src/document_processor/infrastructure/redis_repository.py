@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Protocol, Self, cast
 from uuid import UUID
@@ -17,9 +17,16 @@ from document_processor.domain.models import (
     DocumentStatus,
     PageContent,
     ParserKind,
+    RetryWaiting,
     StateTransition,
 )
+from document_processor.domain.provider import AttemptFailure, RetrySchedule
 from document_processor.infrastructure.redis_errors import redis_error_boundary
+from document_processor.infrastructure.retry_metadata import (
+    decode_deadline,
+    decode_failure,
+    encode_failure,
+)
 
 type RedisValue = bytes | str | int | float
 
@@ -47,6 +54,8 @@ class AsyncRedisPipeline(Protocol):
     async def watch(self, *names: str) -> None: ...
 
     async def unwatch(self) -> None: ...
+
+    async def time(self) -> tuple[int, int]: ...
 
     async def get(self, name: str) -> bytes | str | None: ...
 
@@ -113,6 +122,8 @@ class RedisDocumentRepository:
             error_code=values.get("error_code"),
             error_message=values.get("error_message"),
             completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
+            last_failure=decode_failure(values.get("last_failure"), int(values["attempts"])),
+            retry_not_before=decode_deadline(values.get("retry_not_before")),
         )
 
     async def get_source(self, document_id: UUID) -> bytes | None:
@@ -141,7 +152,16 @@ class RedisDocumentRepository:
                             return values
                         previous = int(values["attempts"])
                         if previous >= max_attempts:
-                            return AttemptsExhausted(previous)
+                            return AttemptsExhausted(
+                                previous, decode_failure(values.get("last_failure"), previous)
+                            )
+                        deadline = decode_deadline(values.get("retry_not_before"))
+                        if deadline is not None:
+                            seconds, micros = await pipeline.time()
+                            now = datetime.fromtimestamp(seconds + micros / 1_000_000, UTC)
+                            delay = (deadline - now).total_seconds()
+                            if delay > 0:
+                                return RetryWaiting(previous, RetrySchedule(deadline, delay))
                         attempt = previous + 1
                         pipeline.multi()
                         pipeline.hset(
@@ -152,10 +172,38 @@ class RedisDocumentRepository:
                                 "updated_at": updated_at.isoformat(),
                             },
                         )
+                        pipeline.hdel(self.document_key(document_id), "retry_not_before")
                         await pipeline.execute()
                         return attempt
                     except WatchError:
                         continue
+
+    async def record_retry_failure(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        failure: AttemptFailure,
+        retry_not_before: datetime | None,
+        updated_at: datetime,
+    ) -> StateTransition:
+        """Retain safe evidence before waiting, without renewing retention or deleting source."""
+        fields: dict[str, RedisValue] = {
+            "last_failure": encode_failure(failure),
+            "updated_at": updated_at.isoformat(),
+        }
+        if retry_not_before is not None:
+            if retry_not_before.tzinfo is None:
+                raise ValueError("Retry deadlines must include a timezone.")
+            fields["retry_not_before"] = retry_not_before.isoformat()
+        return await self._update_owned(
+            document_id,
+            token,
+            fields=fields,
+            expected_attempt=failure.attempt,
+            delete_source=False,
+            clear_fields=("retry_not_before",) if retry_not_before is None else (),
+        )
 
     async def complete(
         self,
@@ -182,8 +230,9 @@ class RedisDocumentRepository:
                 "updated_at": completed_at.isoformat(),
                 "completed_at": completed_at.isoformat(),
             },
-            terminal_attempt=attempts,
-            clear_fields=("error_code", "error_message"),
+            expected_attempt=attempts,
+            delete_source=True,
+            clear_fields=("error_code", "error_message", "last_failure", "retry_not_before"),
         )
 
     async def fail(
@@ -207,8 +256,10 @@ class RedisDocumentRepository:
                 "updated_at": completed_at.isoformat(),
                 "completed_at": completed_at.isoformat(),
             },
-            terminal_attempt=attempts,
-            clear_fields=("pages", "summary"),
+            expected_attempt=attempts,
+            delete_source=True,
+            clear_fields=("pages", "summary", "retry_not_before")
+            + (() if error_code == "retry_exhausted" else ("last_failure",)),
         )
 
     async def _watch_owned_document(
@@ -239,7 +290,8 @@ class RedisDocumentRepository:
         token: str,
         *,
         fields: Mapping[str, RedisValue],
-        terminal_attempt: int | None = None,
+        expected_attempt: int,
+        delete_source: bool,
         clear_fields: tuple[str, ...] = (),
     ) -> StateTransition:
         key = self.document_key(document_id)
@@ -250,17 +302,17 @@ class RedisDocumentRepository:
                         values = await self._watch_owned_document(pipeline, document_id, token)
                         if isinstance(values, StateTransition):
                             return values
-                        if terminal_attempt is not None and (
+                        if (
                             values.get("status") != DocumentStatus.PROCESSING
-                            or terminal_attempt <= 0
-                            or values.get("attempts") != str(terminal_attempt)
+                            or expected_attempt <= 0
+                            or values.get("attempts") != str(expected_attempt)
                         ):
                             return StateTransition.LOST_OWNERSHIP
                         pipeline.multi()
                         pipeline.hset(key, mapping=fields)
                         if clear_fields:
                             pipeline.hdel(key, *clear_fields)
-                        if terminal_attempt is not None:
+                        if delete_source:
                             pipeline.delete(self.source_key(document_id))
                         await pipeline.execute()
                         return StateTransition.APPLIED
@@ -319,12 +371,14 @@ class RedisDocumentRepository:
 
     @staticmethod
     def _decode_mapping(values: Mapping[bytes | str, bytes | str]) -> dict[str, str]:
-        return {
-            key.decode() if isinstance(key, bytes) else key: (
-                value.decode() if isinstance(value, bytes) else value
+        decoded: dict[str, str] = {}
+        for raw_key, raw_value in values.items():
+            key = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+            errors = "replace" if key in {"last_failure", "retry_not_before"} else "strict"
+            decoded[key] = (
+                raw_value.decode(errors=errors) if isinstance(raw_value, bytes) else raw_value
             )
-            for key, value in values.items()
-        }
+        return decoded
 
     @staticmethod
     def _decode_pages(encoded: str) -> tuple[PageContent, ...]:

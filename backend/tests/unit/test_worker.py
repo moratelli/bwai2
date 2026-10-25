@@ -19,6 +19,7 @@ from document_processor.domain.errors import (
     RetryableProcessingError,
 )
 from document_processor.domain.models import AttemptAdmission, AttemptsExhausted, StateTransition
+from document_processor.domain.provider import AttemptFailure
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
@@ -85,6 +86,23 @@ class FakeRepository:
     renewals: int = 0
     release_gate: asyncio.Event | None = None
     release_finished: asyncio.Event = field(default_factory=asyncio.Event)
+    last_failure: AttemptFailure | None = None
+    retry_deadlines: list[datetime | None] = field(default_factory=list[datetime | None])
+
+    async def record_retry_failure(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        failure: AttemptFailure,
+        retry_not_before: datetime | None,
+        updated_at: datetime,
+    ) -> StateTransition:
+        assert document_id == DOCUMENT_ID and token == LOCK_OWNER and updated_at == NOW
+        assert failure.attempt == self.attempts
+        self.last_failure = failure
+        self.retry_deadlines.append(retry_not_before)
+        return StateTransition.APPLIED
 
     async def admit_attempt(
         self,
@@ -99,7 +117,7 @@ class FakeRepository:
         if self.admission_error is not None:
             raise self.admission_error
         if self.attempts >= max_attempts:
-            return AttemptsExhausted(self.attempts)
+            return AttemptsExhausted(self.attempts, self.last_failure)
         self.attempts += 1
         return self.attempts
 

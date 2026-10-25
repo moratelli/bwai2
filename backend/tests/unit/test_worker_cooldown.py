@@ -2,7 +2,8 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -12,7 +13,9 @@ from document_processor.domain.errors import (
     InfrastructureUnavailableError,
     RetryableProcessingError,
 )
+from document_processor.domain.models import AttemptAdmission, RetryWaiting
 from document_processor.domain.provider import ProviderFailure, RetrySchedule
+from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
 from tests.unit.test_worker import (
     LOCK_OWNER,
@@ -125,6 +128,42 @@ async def test_uncertain_cooldown_leaves_work_pending_without_more_processing() 
     assert queue.events == ["group"]
     assert not any(event.startswith("fail:") for event in repository.events)
     assert repository.events[-1] == "release"
+
+
+async def test_deferred_admission_waits_before_processing_without_spending_attempt() -> None:
+    class DeferredRepository(FakeRepository):
+        waiting = True
+
+        async def admit_attempt(
+            self,
+            document_id: UUID,
+            *,
+            token: str,
+            max_attempts: int,
+            updated_at: datetime,
+        ) -> AttemptAdmission:
+            if self.waiting:
+                self.waiting = False
+                return RetryWaiting(self.attempts, RetrySchedule(NOW + timedelta(seconds=60), 60))
+            return await super().admit_attempt(
+                document_id,
+                token=token,
+                max_attempts=max_attempts,
+                updated_at=updated_at,
+            )
+
+    repository = DeferredRepository(attempts=1)
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED])
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        assert repository.attempts == 1 and processor.attempts == []
+        sleeps.append(seconds)
+
+    queue = FakeQueue(new=(MESSAGE,))
+    await instance(queue, repository, processor, CooldownGate(), sleep).run_once()
+    assert sleeps == [60] and processor.attempts == [2]
+    assert queue.events[-1] == "ack:1-0"
 
 
 def test_runtime_retry_defaults_are_slow_and_bounded() -> None:

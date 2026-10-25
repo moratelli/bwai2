@@ -132,6 +132,8 @@ The retry budget counts attempts admitted in a Redis transaction, not stream del
 
 State changes check the current lease owner and the live document record in the same Redis transaction. Terminal writes also check the processing attempt. A stale worker cannot overwrite a result, delete another worker's source, or recreate an expired record. Processing does not extend the original retention deadline.
 
+Retry storage uses those same owner and attempt checks. A future retry deadline defers admission without incrementing the counter; Redis server time decides when it is due. Admission clears the deadline but retains the attempt-tagged last failure. A later infrastructure failure replaces earlier Gemini attribution. Completion clears all retry evidence, permanent failure clears unrelated evidence, and exhaustion retains the last confirmed context. Missing or malformed optional metadata does not manufacture a cause or break legacy records.
+
 The worker renews its lease every third of its configured lifetime, including while waiting between retries. If renewal fails or cannot be confirmed within that interval, it cancels local processing and leaves unfinished work pending. Cleanup cancels and awaits the owned tasks and bounds lease release to at most five seconds. A failed release is logged without replacing the original processing or cancellation outcome.
 
 Cancellation cannot revoke a provider request already sent. A crash or lost lease can still lead to repeated provider calls; the ownership checks protect stored results, not exactly-once execution.

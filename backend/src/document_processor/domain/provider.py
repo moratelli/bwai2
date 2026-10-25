@@ -19,6 +19,12 @@ class ProviderFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class AttemptFailure:
+    attempt: int
+    provider_info: ProviderFailure | None
+
+
+@dataclass(frozen=True, slots=True)
 class RetrySchedule:
     not_before: datetime
     delay_seconds: float
