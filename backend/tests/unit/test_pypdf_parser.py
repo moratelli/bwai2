@@ -3,7 +3,8 @@
 from io import BytesIO
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
+from pypdf.errors import LimitReachedError
 from reportlab.pdfgen import canvas
 
 from document_processor.domain.errors import PermanentProcessingError
@@ -72,6 +73,21 @@ async def test_rejects_encrypted_pdf_with_safe_permanent_error() -> None:
 
     assert caught.value.code == "encrypted_pdf"
     assert str(caught.value) == "Encrypted PDFs are not supported."
+
+
+def test_malformed_fixture_reaches_library_limit(malformed_xref_pdf: bytes) -> None:
+    with pytest.raises(LimitReachedError, match="Declared size"):
+        PdfReader(BytesIO(malformed_xref_pdf), strict=False)
+
+
+@pytest.mark.asyncio
+async def test_library_limit_becomes_safe_permanent_error(malformed_xref_pdf: bytes) -> None:
+    with pytest.raises(PermanentProcessingError) as caught:
+        await PyPdfParser().parse(malformed_xref_pdf)
+
+    assert caught.value.code == "invalid_pdf"
+    assert str(caught.value) == "The PDF is corrupt or unsupported."
+    assert isinstance(caught.value.__cause__, LimitReachedError)
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 from io import BytesIO
 
 from pypdf import PdfReader
-from pypdf.errors import FileNotDecryptedError, PdfReadError
+from pypdf.errors import PyPdfError
 
 from document_processor.domain.errors import PermanentProcessingError
 
@@ -23,7 +23,7 @@ def source_page_count(content: bytes) -> int:
         return count
     except PermanentProcessingError:
         raise
-    except (PdfReadError, FileNotDecryptedError, ValueError, KeyError, TypeError) as error:
+    except (PyPdfError, ValueError, KeyError, TypeError) as error:
         raise PermanentProcessingError(
             "invalid_pdf",
             "The PDF is corrupt or unsupported.",

@@ -8,6 +8,7 @@ import httpx
 import pytest
 from google.genai import types
 from pypdf import PdfWriter
+from pypdf.errors import LimitReachedError
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.infrastructure.parsers.gemini_parser import (
@@ -79,6 +80,36 @@ class FakeProviderError(Exception):
 def client_with(response: str | Exception | None) -> tuple[FakeClient, FakeModels]:
     models = FakeModels(FakeResponse(response) if not isinstance(response, Exception) else response)
     return FakeClient(aio=FakeAsyncClient(models=models)), models
+
+
+@pytest.mark.asyncio
+async def test_library_limit_is_rejected_before_provider_request(malformed_xref_pdf: bytes) -> None:
+    client, models = client_with(None)
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await GeminiPdfParser(client=client, model="test-model").parse(malformed_xref_pdf)
+
+    assert caught.value.code == "invalid_pdf"
+    assert str(caught.value) == "The PDF is corrupt or unsupported."
+    assert isinstance(caught.value.__cause__, LimitReachedError)
+    assert models.requests == []
+
+
+@pytest.mark.asyncio
+async def test_encrypted_pdf_keeps_distinct_error_before_provider_request() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt("synthetic-password")
+    output = BytesIO()
+    writer.write(output)
+    client, models = client_with(None)
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await GeminiPdfParser(client=client, model="test-model").parse(output.getvalue())
+
+    assert caught.value.code == "encrypted_pdf"
+    assert str(caught.value) == "Encrypted PDFs are not supported."
+    assert models.requests == []
 
 
 def test_provider_schema_uses_only_supported_structured_output_keywords() -> None:

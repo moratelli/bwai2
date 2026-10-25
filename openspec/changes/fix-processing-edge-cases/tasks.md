@@ -2,7 +2,7 @@
 
 ## Execution rules
 
-Use the existing linked `dev` worktree, starting from `f87c1ad66d2413b690f0c6486cdff0f5de96a070`. Runtime implementation begins only after the complete plan passes review and Pedro approves it. Keep all progress and evidence in this file; do not create a separate ledger.
+Use the existing linked `dev` worktree, starting from `f87c1ad66d2413b690f0c6486cdff0f5de96a070`. Opus reviewed the complete plan at `20e5aeb` and returned no findings. Pedro approved all tasks and the stated delivery boundaries on 2026-10-25. Keep all progress and evidence in this file; do not create a separate ledger.
 
 For each behavioral task, write and run its failing regression before editing production code. Implement the smallest correction, run the focused tests and static checks, self-review, then commit code, tests, any required README change and this task's evidence together. Continue through the approved tasks without routine approval pauses.
 
@@ -10,9 +10,10 @@ Focused Python gates for tasks 1-3: `uv run --project backend ruff check backend
 
 ## 1. Contain PDF-library failures
 
-- [ ] 1.1 Add a bounded malformed-cross-reference regression and map relevant `PyPdfError` failures in both PDF adapters to the existing permanent `invalid_pdf` error. Verify both parsers fail safely, Gemini makes no provider request for rejected local input, source cleanup and acknowledgement occur, and a valid sibling completes through the same worker without an escaping exception. Preserve the explicit encrypted-PDF path and existing non-library exception handling. Run `uv run --project backend pytest backend/tests/unit/test_pypdf_parser.py backend/tests/unit/test_gemini_parser.py backend/tests/unit/test_processing.py backend/tests/unit/test_worker.py backend/tests/integration/test_processing_edge_cases.py` and the focused Python gates before completing the task.
+- [x] 1.1 Add a bounded malformed-cross-reference regression and map relevant `PyPdfError` failures in both PDF adapters to the existing permanent `invalid_pdf` error. Verify both parsers fail safely, Gemini makes no provider request for rejected local input, source cleanup and acknowledgement occur, and a valid sibling completes through the same worker without an escaping exception. Preserve the explicit encrypted-PDF path and existing non-library exception handling. Run `uv run --project backend pytest backend/tests/unit/test_pypdf_parser.py backend/tests/unit/test_gemini_parser.py backend/tests/unit/test_processing.py backend/tests/unit/test_worker.py backend/tests/integration/test_processing_edge_cases.py` and the focused Python gates before completing the task.
   - Add `backend/tests/integration/test_processing_edge_cases.py` for actual adapter/service/repository/queue/worker/result-boundary regressions using synthetic input and fake Redis. Do not assert stream-entry deletion yet; task 3 adds that policy.
   - Cover safe fixed messages and retained normal, corrupt and encrypted behavior. Do not add a generic worker exception handler or new error code. This restores the canonical permanent-parser-failure behavior; no new user-facing parser policy is needed.
+  - Evidence: the tiny synthetic cross-reference fixture raises the actual `LimitReachedError`. RED: 4 intended failures, 87 passes. GREEN: all 91 focused tests pass; both parsers isolate failure and the same worker completes a valid sibling. Ruff, format, both mypy targets, all six targeted LSP checks and diff checks pass. Self-review confirms only the two adapter exception boundaries changed.
 
 ## 2. Reject truncated summaries
 

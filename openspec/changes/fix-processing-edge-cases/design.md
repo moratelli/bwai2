@@ -62,7 +62,7 @@ The parser and summary corrections remain inside their current adapter boundarie
 - **Context:** absent. Bounded checks at the repository, backend package, document-processor package and affected infrastructure/adapter roots found no `CONTEXT.md` or `CONTEXT-MAP.md`.
 - **ADR:** absent. The same bounded roots contain no `docs/adr` authority, and OpenSpec configuration designates none.
 - **Architecture map:** absent. Those roots contain no `ARCHITECTURE.md` or `docs/architecture` authority; OpenSpec configuration designates no alternative. README is explanatory documentation, not a separately designated architecture authority.
-- **Change/status:** `fix-processing-edge-cases` is proposed. Pedro requested all three fixes on 2026-10-25; approval of the completed, reviewed implementation plan is still pending. Runtime edits and canonical-spec synchronization are not yet authorized by this plan.
+- **Change/status:** `fix-processing-edge-cases` is approved. Opus reviewed the complete plan at `20e5aeb` with no findings, and Pedro approved all tasks and delivery boundaries on 2026-10-25. Implementation, verification, archive and PR #1 update are authorized; live calls, historical purges, existing-stack changes, merge and updates to `main` are not.
 
 ## Risks / Trade-offs
 

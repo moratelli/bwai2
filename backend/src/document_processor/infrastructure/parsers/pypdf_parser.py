@@ -4,7 +4,7 @@ import asyncio
 from io import BytesIO
 
 from pypdf import PdfReader
-from pypdf.errors import FileNotDecryptedError, PdfReadError
+from pypdf.errors import PyPdfError
 
 from document_processor.domain.errors import PermanentProcessingError
 from document_processor.domain.models import PageContent
@@ -31,7 +31,7 @@ class PyPdfParser:
             )
         except PermanentProcessingError:
             raise
-        except (PdfReadError, FileNotDecryptedError, ValueError, KeyError, TypeError) as error:
+        except (PyPdfError, ValueError, KeyError, TypeError) as error:
             raise PermanentProcessingError(
                 "invalid_pdf",
                 "The PDF is corrupt or unsupported.",
