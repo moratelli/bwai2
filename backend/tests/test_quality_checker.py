@@ -192,6 +192,34 @@ def test_invalid_json_does_not_expose_input_or_exception_details(tmp_path: Path)
     assert "Traceback" not in process.stderr
 
 
+@pytest.mark.parametrize("manifest_exists", [False, True])
+def test_missing_or_invalid_manifest_fails_at_the_cli_boundary(
+    tmp_path: Path,
+    manifest_exists: bool,
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    checker = scripts / "check_quality_result.py"
+    checker.write_bytes(CHECKER.read_bytes())
+    if manifest_exists:
+        fixtures = tmp_path / "fixtures"
+        fixtures.mkdir()
+        (fixtures / "quality-report.expected.json").write_text("PRIVATE_MANIFEST_CANARY")
+    source = tmp_path / "result.json"
+    source.write_text(json.dumps(valid_result()))
+    process = subprocess.run(  # noqa: S603 - trusted copied script and interpreter; no shell
+        [sys.executable, str(checker), str(source)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert process.returncode == 1
+    assert json.loads(process.stdout)["checks"] == [{"name": "quality_input", "passed": False}]
+    assert "CANARY" not in process.stdout + process.stderr
+    assert "Traceback" not in process.stderr
+
+
 @pytest.mark.parametrize("result", [None, [], {}, {"status": "completed", "pages": "bad"}])
 def test_malformed_result_fails_safely(tmp_path: Path, result: object) -> None:
     process = run_checker(tmp_path, result)

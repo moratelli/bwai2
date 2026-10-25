@@ -217,6 +217,8 @@ This target installs the pinned Playwright Chromium build, opens the real React 
 
 `fixtures/quality-report.pdf` is a deterministic two-page synthetic report with a revenue table. The [fixture guide](fixtures/README.md) explains regeneration and offline labelled-fact checks. These checks do not use provider credentials.
 
+For one live extraction/summary check, run `make live-quality`. It uses the existing Gemini credential in its own disposable stack, verifies real-summarizer mode, and allows one admitted attempt. It has a five-minute budget and checks the labelled facts before removing its own containers and volume. It does not reuse your running stack or retry a failed job automatically.
+
 ## Published images
 
 After CI succeeds for a push to `main`, the CD workflow publishes two images:

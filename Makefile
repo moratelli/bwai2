@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate-api check-api format format-check lint typecheck test build check up down logs smoke browser-e2e live-providers clean
+.PHONY: help setup generate-api check-api format format-check lint typecheck test build check up down logs smoke browser-e2e live-providers live-quality clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -87,6 +87,9 @@ live-providers: ## Exercise live Gemini PDF extraction and summarization
 		trap 'docker compose down --volumes --remove-orphans' EXIT; \
 		TEST_SUMMARIZER_ENABLED=false docker compose up --build --detach --wait; \
 		./scripts/live_provider_test.sh
+
+live-quality: ## Check one live Gemini job in a runner-owned disposable stack
+	uv run --project backend python scripts/live_quality_test.py
 
 clean: ## Remove generated build and test artifacts
 	rm -rf backend/dist frontend/dist .tmp .pytest_cache backend/.pytest_cache .mypy_cache backend/.mypy_cache .ruff_cache backend/.ruff_cache htmlcov .coverage

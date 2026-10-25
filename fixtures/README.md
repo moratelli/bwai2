@@ -11,6 +11,20 @@ uv run --project backend pytest backend/tests/test_quality_fixture.py
 
 The tests compare two generator runs with the committed bytes and check the facts on each page.
 
+## Run the live check
+
+With the existing Gemini credential in your environment or untracked `.env`, run from the repository root:
+
+```bash
+make live-quality
+```
+
+This command contacts Gemini and uses provider quota. It creates a unique `bwai2-quality-*` Compose project and lets Docker choose a localhost port. It ignores an existing `APP_URL` and does not target your running stack. The runner forces the real summarizer, one worker, and one admitted attempt, then verifies the worker configuration before uploading the fixture. It does not print or modify the credential.
+
+The run has a five-minute budget, with thirty seconds reserved for cleanup, and bounded individual HTTP calls. It submits once, checks the resulting job identity, attempt count and facts, and removes only its own containers and volume. The JSON report includes an explicit cleanup check; a failed cleanup or fact assertion makes the command fail. SDK-level retries remain unchanged.
+
+The runner does not retry a failed job automatically. During the approved delivery check, only one additional run is allowed after a classified transient provider failure, never to bypass a factual assertion. One successful run establishes this fixture/model result only, not general document quality or exactly-once provider execution. CI runs the fake-HTTP runner tests without credentials or Docker.
+
 ## Check an exported result
 
 Save the completed API result as JSON, then run:

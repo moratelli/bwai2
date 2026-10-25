@@ -54,7 +54,9 @@ def _record(value: object) -> Mapping[str, object]:
 def _has_fact(text: object, fact: ExpectedFact) -> bool:
     if not isinstance(text, str):
         return False
-    normalized = re.sub(r"[*_`#|]", " ", unicodedata.normalize("NFKC", text))
+    normalized = " ".join(
+        re.sub(r"[*_`#|]", " ", unicodedata.normalize("NFKC", text)).split()
+    )
     label = r"\s+".join(re.escape(word) for word in fact["label"].split())
     pattern = re.compile(
         rf"(?<!\w){label}\b\s*(?::|=)?\s*"
