@@ -112,9 +112,13 @@ poll result <── Redis terminal state <── worker pool
                                        +──────── Gemini summary
 ```
 
-A submission transaction stores metadata under `document:<uuid>`, raw PDF bytes under `document:<uuid>:source`, and an entry in the `documents:processing` stream. Keys expire after 24 hours by default.
+A submission transaction stores metadata under `document:<uuid>`, raw PDF bytes under `document:<uuid>:source`, and an entry in the `documents:processing` stream. Document and source keys expire after 24 hours by default.
 
-Workers use the `document-workers` consumer group. They reclaim stale pending messages before reading new ones and acquire `document:<uuid>:lock`. They acknowledge only after terminal publication or after observing an already-terminal or absent document. Terminal writes also delete the raw PDF. Temporary provider failures get bounded exponential retries; permanent failures are stored with safe error codes and messages.
+Workers use the `document-workers` consumer group. They reclaim stale pending messages before reading new ones and acquire `document:<uuid>:lock`. They acknowledge and delete each eligible stream entry in one transaction, only after terminal publication or after observing an already-terminal or absent document. Terminal writes also delete the raw PDF. Temporary provider failures get bounded exponential retries; permanent failures are stored with safe error codes and messages.
+
+The processing stream supports one logical consumer group shared by all worker instances. Confirm that topology before deploying this cleanup behavior: deleting an entry removes its payload for every group, so separate groups on the same stream are unsupported. Pending and unread jobs remain recoverable. Completed and failed document results keep their existing expiry deadlines.
+
+Queue entries are not an audit log. Startup does not scan or purge previously acknowledged history; cleanup applies only to entries subsequently selected for safe acknowledgement.
 
 `WORKER_CONCURRENCY` controls the number of consumers inside the worker container. The default is two. Each consumer fetches one job at a time by default; larger batches remain an explicit worker-setting override.
 

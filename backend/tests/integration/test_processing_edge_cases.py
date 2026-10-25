@@ -6,17 +6,24 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from io import BytesIO, StringIO
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
-from fakeredis.aioredis import FakeRedis
 from google.genai import types
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from reportlab.pdfgen import canvas
 
 from document_processor.api.app import create_app
 from document_processor.config import Settings
-from document_processor.domain.models import DocumentStatus, NewDocument, PageContent, ParserKind
+from document_processor.domain.errors import RetryableProcessingError
+from document_processor.domain.models import (
+    DocumentStatus,
+    NewDocument,
+    PageContent,
+    ParserKind,
+    StateTransition,
+)
 from document_processor.infrastructure.parsers.gemini_parser import GeminiPdfParser
 from document_processor.infrastructure.parsers.pypdf_parser import PyPdfParser
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
@@ -33,12 +40,25 @@ VALID_ID = UUID("00000000-0000-4000-8000-000000000032")
 
 
 @pytest.fixture
-async def redis() -> AsyncIterator[FakeRedis]:
-    client = FakeRedis()
+def stream_name() -> str:
+    return f"test-edge-pipeline:{uuid4()}"
+
+
+@pytest.fixture
+async def redis(queue_redis: Redis, stream_name: str) -> AsyncIterator[Redis]:
     try:
-        yield client
+        yield queue_redis
     finally:
-        await client.aclose()
+        keys = [stream_name]
+        for identifier in (FAILED_ID, VALID_ID):
+            keys.extend(
+                [
+                    RedisDocumentRepository.document_key(identifier),
+                    RedisDocumentRepository.source_key(identifier),
+                    RedisDocumentRepository.lock_key(identifier),
+                ]
+            )
+        await queue_redis.delete(*keys)
 
 
 class StubModels:
@@ -85,6 +105,8 @@ def make_worker(
     repository: RedisDocumentRepository,
     parsers: ParserRegistry,
     summarizer: DocumentSummarizer,
+    *,
+    reclaim_idle_ms: int = 30_000,
 ) -> DocumentWorker:
     return DocumentWorker(
         queue=queue,
@@ -94,7 +116,7 @@ def make_worker(
         max_attempts=3,
         retry_base_seconds=0,
         retry_jitter_seconds=0,
-        reclaim_idle_ms=30_000,
+        reclaim_idle_ms=reclaim_idle_ms,
         read_block_ms=1,
         batch_size=1,
         lock_ttl_seconds=30,
@@ -106,7 +128,7 @@ def make_worker(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("parser_kind", list(ParserKind))
 async def test_pdf_limit_failure_does_not_interrupt_sibling(
-    redis: FakeRedis, malformed_xref_pdf: bytes, parser_kind: ParserKind
+    redis: Redis, malformed_xref_pdf: bytes, parser_kind: ParserKind, stream_name: str
 ) -> None:
     models = StubModels(
         types.GenerateContentResponse(
@@ -125,8 +147,8 @@ async def test_pdf_limit_failure_does_not_interrupt_sibling(
     )
     client = SimpleNamespace(aio=SimpleNamespace(models=models))
     repository = RedisDocumentRepository(redis)
-    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600)
-    queue = RedisStreamQueue(redis)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600, stream_name=stream_name)
+    queue = RedisStreamQueue(redis, stream_name=stream_name)
     summarizer = StubSummarizer()
     worker = make_worker(
         queue,
@@ -156,6 +178,7 @@ async def test_pdf_limit_failure_does_not_interrupt_sibling(
     assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
     assert models.calls == 0
     assert summarizer.calls == []
+    assert await redis.xlen(stream_name) == 1
 
     assert await worker.run_once() == 1
     completed = await repository.get(VALID_ID)
@@ -166,6 +189,7 @@ async def test_pdf_limit_failure_does_not_interrupt_sibling(
     assert completed.summary == "Synthetic sibling summary."
     assert await repository.get_source(VALID_ID) is None
     assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
+    assert await redis.xlen(stream_name) == 0
     assert len(summarizer.calls) == 1
     assert models.calls == int(parser_kind is ParserKind.GEMINI)
 
@@ -184,7 +208,10 @@ async def test_pdf_limit_failure_does_not_interrupt_sibling(
 
 @pytest.mark.asyncio
 async def test_truncated_summary_is_persisted_before_ack_without_leaking_content(
-    redis: FakeRedis, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    redis: Redis,
+    stream_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     payload = "SUMMARY_PAYLOAD_CANARY"
     metadata = "SUMMARY_METADATA_CANARY"
@@ -197,8 +224,8 @@ async def test_truncated_summary_is_persisted_before_ack_without_leaking_content
     client = SimpleNamespace(aio=SimpleNamespace(models=models))
     summarizer = GeminiSummarizer(client=client, model="test", chunk_size=1000)
     repository = RedisDocumentRepository(redis)
-    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600)
-    queue = RedisStreamQueue(redis)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600, stream_name=stream_name)
+    queue = RedisStreamQueue(redis, stream_name=stream_name)
     worker = make_worker(queue, repository, {ParserKind.PYPDF: PyPdfParser()}, summarizer)
     acknowledge = queue.acknowledge
     acknowledgements: list[str] = []
@@ -230,6 +257,7 @@ async def test_truncated_summary_is_persisted_before_ack_without_leaking_content
         assert failed.pages is None and failed.summary is None
         assert models.calls == 1
         assert len(acknowledgements) == 1
+        assert await redis.xlen(stream_name) == 0
         assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
 
         app = create_app(
@@ -253,3 +281,134 @@ async def test_truncated_summary_is_persisted_before_ack_without_leaking_content
     finally:
         logger.removeHandler(handler)
         handler.close()
+
+
+class NeverParser:
+    async def parse(self, content: bytes) -> tuple[PageContent, ...]:
+        raise AssertionError("Terminal or absent document reached extraction")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [DocumentStatus.COMPLETED, DocumentStatus.FAILED, None])
+async def test_redelivered_terminal_or_absent_document_only_cleans_up_queue(
+    redis: Redis, stream_name: str, status: DocumentStatus | None
+) -> None:
+    repository = RedisDocumentRepository(redis)
+    queue = RedisStreamQueue(redis, stream_name=stream_name)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600, stream_name=stream_name)
+    await gateway.create_batch([new_document(FAILED_ID, text_pdf(), ParserKind.PYPDF)])
+    await queue.ensure_group()
+    messages = await queue.read_new("previous-worker", count=1, block_ms=1)
+    key = repository.document_key(FAILED_ID)
+    if status is None:
+        await redis.delete(key, repository.source_key(FAILED_ID))
+    else:
+        previous_owner = "previous-owner"
+        assert await repository.acquire_lock(FAILED_ID, previous_owner, ttl_seconds=30)
+        assert (
+            await repository.admit_attempt(
+                FAILED_ID, token=previous_owner, max_attempts=3, updated_at=datetime.now(UTC)
+            )
+            == 1
+        )
+        if status is DocumentStatus.COMPLETED:
+            result = await repository.complete(
+                FAILED_ID,
+                token=previous_owner,
+                pages=[PageContent(0, "Saved page")],
+                summary="Saved summary",
+                completed_at=datetime.now(UTC),
+                attempts=1,
+            )
+        else:
+            result = await repository.fail(
+                FAILED_ID,
+                token=previous_owner,
+                error_code="invalid_pdf",
+                error_message="Saved failure",
+                completed_at=datetime.now(UTC),
+                attempts=1,
+            )
+        assert result is StateTransition.APPLIED
+        assert await repository.release_lock(FAILED_ID, previous_owner)
+    before = await repository.get(FAILED_ID)
+    ttl = await redis.pttl(key)
+    summarizer = StubSummarizer()
+    worker = make_worker(
+        queue, repository, {ParserKind.PYPDF: NeverParser()}, summarizer, reclaim_idle_ms=0
+    )
+
+    assert await worker.run_once() == 1
+
+    assert await repository.get(FAILED_ID) == before
+    assert await repository.get_source(FAILED_ID) is None
+    assert (await redis.xpending(stream_name, queue.group_name))["pending"] == 0
+    assert await redis.xlen(stream_name) == 0
+    assert summarizer.calls == []
+    assert messages[0].document_id == FAILED_ID
+    if status is None:
+        assert await redis.pttl(key) == -2
+    else:
+        assert 0 < await redis.pttl(key) <= ttl
+
+
+@pytest.mark.asyncio
+async def test_exhausted_failure_is_retained_after_queue_cleanup(
+    redis: Redis, stream_name: str
+) -> None:
+    class RetryableSummarizer:
+        calls = 0
+
+        async def summarize(self, pages: Sequence[PageContent]) -> str:
+            self.calls += 1
+            raise RetryableProcessingError("temporary", "Synthetic temporary failure")
+
+    repository = RedisDocumentRepository(redis)
+    queue = RedisStreamQueue(redis, stream_name=stream_name)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600, stream_name=stream_name)
+    await gateway.create_batch([new_document(FAILED_ID, text_pdf(), ParserKind.PYPDF)])
+    summarizer = RetryableSummarizer()
+    worker = make_worker(queue, repository, {ParserKind.PYPDF: PyPdfParser()}, summarizer)
+
+    assert await worker.run_once() == 1
+
+    failed = await repository.get(FAILED_ID)
+    assert failed is not None and failed.status is DocumentStatus.FAILED
+    assert failed.error_code == "retry_exhausted"
+    assert failed.attempts == summarizer.calls == 3
+    assert await repository.get_source(FAILED_ID) is None
+    assert await redis.pttl(repository.document_key(FAILED_ID)) > 0
+    assert (await redis.xpending(stream_name, queue.group_name))["pending"] == 0
+    assert await redis.xlen(stream_name) == 0
+
+
+@pytest.mark.asyncio
+async def test_lost_ownership_preserves_pending_payload_and_source(
+    redis: Redis, stream_name: str
+) -> None:
+    repository = RedisDocumentRepository(redis)
+
+    class OwnershipLosingParser:
+        async def parse(self, content: bytes) -> tuple[PageContent, ...]:
+            assert await repository.release_lock(FAILED_ID, "LEASE_CANARY")
+            assert await repository.acquire_lock(FAILED_ID, "replacement", ttl_seconds=30)
+            return await PyPdfParser().parse(content)
+
+    queue = RedisStreamQueue(redis, stream_name=stream_name)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600, stream_name=stream_name)
+    content = text_pdf()
+    await gateway.create_batch([new_document(FAILED_ID, content, ParserKind.PYPDF)])
+    worker = make_worker(
+        queue, repository, {ParserKind.PYPDF: OwnershipLosingParser()}, StubSummarizer()
+    )
+
+    assert await worker.run_once() == 1
+
+    unfinished = await repository.get(FAILED_ID)
+    assert unfinished is not None and unfinished.status is DocumentStatus.PROCESSING
+    assert unfinished.pages is None and unfinished.summary is None
+    assert await repository.get_source(FAILED_ID) == content
+    assert (await redis.xpending(stream_name, queue.group_name))["pending"] == 1
+    assert await redis.xlen(stream_name) == 1
+    recovered = await queue.reclaim_stale("replacement", minimum_idle_ms=0, count=1)
+    assert [message.document_id for message in recovered] == [FAILED_ID]

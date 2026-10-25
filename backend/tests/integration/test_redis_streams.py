@@ -1,24 +1,31 @@
-"""Integration tests for Redis Streams queue behavior."""
+"""Queue lifecycle checks against fake and disposable real Redis."""
 
-from collections.abc import AsyncGenerator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
-from uuid import UUID
+from typing import cast
+from uuid import UUID, uuid4
 
-import fakeredis.aioredis
 import pytest
 from redis.asyncio import Redis
+from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from document_processor.domain.models import DocumentStatus, NewDocument, ParserKind
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
+from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 from document_processor.infrastructure.redis_streams import RedisStreamQueue
 
 FIRST_ID = UUID("00000000-0000-4000-8000-000000000001")
 SECOND_ID = UUID("00000000-0000-4000-8000-000000000002")
+THIRD_ID = UUID("00000000-0000-4000-8000-000000000003")
+type QueueStore = tuple[RedisStreamQueue, Redis]
 
 
-async def enqueue(redis: Redis, identifiers: Sequence[UUID]) -> None:
-    await RedisSubmissionGateway(redis, ttl_seconds=60, stream_name="test:documents").create_batch(
+async def enqueue(store: QueueStore, identifiers: Sequence[UUID]) -> None:
+    stream_queue, redis = store
+    await RedisSubmissionGateway(
+        redis, ttl_seconds=60, stream_name=stream_queue.stream_name
+    ).create_batch(
         [
             NewDocument(
                 id=identifier,
@@ -33,37 +40,45 @@ async def enqueue(redis: Redis, identifiers: Sequence[UUID]) -> None:
     )
 
 
-@asynccontextmanager
-async def queue() -> AsyncGenerator[tuple[RedisStreamQueue, Redis]]:
-    redis = fakeredis.aioredis.FakeRedis(decode_responses=False)
+@pytest.fixture
+async def store(queue_redis: Redis) -> AsyncIterator[QueueStore]:
     stream_queue = RedisStreamQueue(
-        redis,
-        stream_name="test:documents",
+        queue_redis,
+        stream_name=f"test-streams:{uuid4()}",
         group_name="test-workers",
     )
     try:
-        yield stream_queue, redis
+        yield stream_queue, queue_redis
     finally:
-        await redis.aclose()
+        keys = [stream_queue.stream_name]
+        for identifier in (FIRST_ID, SECOND_ID, THIRD_ID):
+            keys.extend(
+                [
+                    RedisDocumentRepository.document_key(identifier),
+                    RedisDocumentRepository.source_key(identifier),
+                    RedisDocumentRepository.lock_key(identifier),
+                ]
+            )
+        await queue_redis.delete(*keys)
 
 
 @pytest.mark.asyncio
-async def test_creates_consumer_group_idempotently() -> None:
-    async with queue() as (stream_queue, redis):
-        await stream_queue.ensure_group()
-        await stream_queue.ensure_group()
+async def test_creates_consumer_group_idempotently(store: QueueStore) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await queue.ensure_group()
 
-        groups = await redis.xinfo_groups("test:documents")
+    groups = await redis.xinfo_groups(queue.stream_name)
 
     assert len(groups) == 1
     assert groups[0]["name"] == b"test-workers"
 
 
 @pytest.mark.asyncio
-async def test_submission_enqueues_a_complete_batch() -> None:
-    async with queue() as (_stream_queue, redis):
-        await enqueue(redis, [FIRST_ID, SECOND_ID])
-        entries = await redis.xrange("test:documents")
+async def test_submission_enqueues_a_complete_batch(store: QueueStore) -> None:
+    queue, redis = store
+    await enqueue(store, [FIRST_ID, SECOND_ID])
+    entries = await redis.xrange(queue.stream_name)
 
     assert len({message_id for message_id, _fields in entries}) == 2
     assert len(entries) == 2
@@ -74,36 +89,40 @@ async def test_submission_enqueues_a_complete_batch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reads_and_acknowledges_new_messages() -> None:
-    async with queue() as (stream_queue, redis):
-        await stream_queue.ensure_group()
-        await enqueue(redis, [FIRST_ID])
+async def test_reads_and_acknowledges_new_messages(store: QueueStore) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    key = RedisDocumentRepository.document_key(FIRST_ID)
+    repository = RedisDocumentRepository(redis)
+    stored = await repository.get(FIRST_ID)
+    ttl = await redis.pttl(key)
 
-        messages = await stream_queue.read_new("worker-one", count=10, block_ms=1)
-        pending_before = await redis.xpending("test:documents", "test-workers")
-        acknowledged = await stream_queue.acknowledge(messages[0].message_id)
-        pending_after = await redis.xpending("test:documents", "test-workers")
+    messages = await queue.read_new("worker-one", count=10, block_ms=1)
+    pending_before = await redis.xpending(queue.stream_name, queue.group_name)
+    acknowledged = await queue.acknowledge(messages[0].message_id)
 
     assert [(message.document_id, message.delivery_count) for message in messages] == [
         (FIRST_ID, 1)
     ]
     assert pending_before["pending"] == 1
     assert acknowledged == 1
-    assert pending_after["pending"] == 0
+    assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
+    assert await redis.xlen(queue.stream_name) == 0
+    assert await repository.get(FIRST_ID) == stored
+    assert 0 < await redis.pttl(key) <= ttl
+    assert await queue.acknowledge(messages[0].message_id) == 0
+    assert await repository.get(FIRST_ID) == stored
 
 
 @pytest.mark.asyncio
-async def test_reclaims_stale_pending_message_for_another_consumer() -> None:
-    async with queue() as (stream_queue, redis):
-        await stream_queue.ensure_group()
-        await enqueue(redis, [FIRST_ID])
-        original = await stream_queue.read_new("worker-one", count=1, block_ms=1)
+async def test_reclaims_stale_pending_message_for_another_consumer(store: QueueStore) -> None:
+    queue, _redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    original = await queue.read_new("worker-one", count=1, block_ms=1)
 
-        reclaimed = await stream_queue.reclaim_stale(
-            "worker-two",
-            minimum_idle_ms=0,
-            count=10,
-        )
+    reclaimed = await queue.reclaim_stale("worker-two", minimum_idle_ms=0, count=10)
 
     assert [message.message_id for message in reclaimed] == [original[0].message_id]
     assert [message.document_id for message in reclaimed] == [FIRST_ID]
@@ -111,22 +130,116 @@ async def test_reclaims_stale_pending_message_for_another_consumer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acknowledged_redelivery_is_not_reclaimed_again() -> None:
-    async with queue() as (stream_queue, redis):
-        await stream_queue.ensure_group()
-        await enqueue(redis, [FIRST_ID])
-        await stream_queue.read_new("worker-one", count=1, block_ms=1)
-        reclaimed = await stream_queue.reclaim_stale(
-            "worker-two",
-            minimum_idle_ms=0,
-            count=1,
-        )
-        await stream_queue.acknowledge(reclaimed[0].message_id)
+async def test_acknowledged_redelivery_is_not_reclaimed_again(store: QueueStore) -> None:
+    queue, _redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    await queue.read_new("worker-one", count=1, block_ms=1)
+    reclaimed = await queue.reclaim_stale("worker-two", minimum_idle_ms=0, count=1)
+    await queue.acknowledge(reclaimed[0].message_id)
 
-        later = await stream_queue.reclaim_stale(
-            "worker-three",
-            minimum_idle_ms=0,
-            count=1,
-        )
+    assert await queue.reclaim_stale("worker-three", minimum_idle_ms=0, count=1) == ()
 
-    assert later == ()
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_pending_and_unread_siblings(store: QueueStore) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID, SECOND_ID, THIRD_ID])
+    delivered = await queue.read_new("worker-one", count=2, block_ms=1)
+
+    assert await queue.acknowledge(delivered[0].message_id) == 1
+
+    remaining = await redis.xrange(queue.stream_name)
+    assert [fields[b"document_id"] for _mid, fields in remaining] == [
+        str(SECOND_ID).encode(),
+        str(THIRD_ID).encode(),
+    ]
+    assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 1
+    reclaimed = await queue.reclaim_stale("worker-two", minimum_idle_ms=0, count=10)
+    assert [message.document_id for message in reclaimed] == [SECOND_ID]
+    unread = await queue.read_new("worker-three", count=10, block_ms=1)
+    assert [message.document_id for message in unread] == [THIRD_ID]
+
+
+@pytest.mark.asyncio
+async def test_group_remains_usable_after_removing_last_entry(store: QueueStore) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    delivered = await queue.read_new("worker-one", count=1, block_ms=1)
+    await queue.acknowledge(delivered[0].message_id)
+    assert await redis.xlen(queue.stream_name) == 0
+    assert len(await redis.xinfo_groups(queue.stream_name)) == 1
+
+    await enqueue(store, [SECOND_ID])
+    later = await queue.read_new("worker-two", count=1, block_ms=1)
+    assert [message.document_id for message in later] == [SECOND_ID]
+
+
+@pytest.mark.asyncio
+async def test_group_setup_leaves_historical_acknowledged_entries(store: QueueStore) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    delivered = await queue.read_new("old-worker", count=1, block_ms=1)
+    # Simulate the previous acknowledgement-only implementation.
+    await redis.xack(queue.stream_name, queue.group_name, delivered[0].message_id)
+
+    await queue.ensure_group()
+    await enqueue(store, [SECOND_ID])
+    later = await queue.read_new("new-worker", count=1, block_ms=1)
+    await queue.acknowledge(later[0].message_id)
+
+    retained = await redis.xrange(queue.stream_name)
+    assert [mid.decode() for mid, _fields in retained] == [delivered[0].message_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt", [False, True])
+async def test_cleanup_executes_both_commands_in_one_transaction(
+    store: QueueStore, monkeypatch: pytest.MonkeyPatch, interrupt: bool
+) -> None:
+    queue, redis = store
+    await queue.ensure_group()
+    await enqueue(store, [FIRST_ID])
+    delivered = await queue.read_new("worker-one", count=1, block_ms=1)
+    message_id = delivered[0].message_id
+    original_pipeline = redis.pipeline
+    executions: list[Sequence[tuple[object, ...]]] = []
+
+    def inspected_pipeline(*, transaction: bool = True) -> Pipeline:
+        assert transaction is True
+        pipeline = original_pipeline(transaction=transaction)
+        execute = pipeline.execute
+
+        async def inspected_execute(raise_on_error: bool = True) -> list[object]:
+            commands = [args for args, _options in pipeline.command_stack]
+            executions.append(commands)
+            assert commands == [
+                ("XACK", queue.stream_name, queue.group_name, message_id),
+                ("XDEL", queue.stream_name, message_id),
+            ]
+            # Buffered commands must not affect server state before EXEC.
+            assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 1
+            assert await redis.xlen(queue.stream_name) == 1
+            if interrupt:
+                raise RedisConnectionError("Synthetic interruption before execution")
+            return cast(list[object], await execute(raise_on_error=raise_on_error))
+
+        monkeypatch.setattr(pipeline, "execute", inspected_execute)
+        return pipeline
+
+    monkeypatch.setattr(redis, "pipeline", inspected_pipeline)
+    if interrupt:
+        with pytest.raises(RedisConnectionError, match="Synthetic interruption"):
+            await queue.acknowledge(message_id)
+        assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 1
+        assert await redis.xlen(queue.stream_name) == 1
+        recovered = await queue.reclaim_stale("replacement", minimum_idle_ms=0, count=1)
+        assert [message.message_id for message in recovered] == [message_id]
+    else:
+        assert await queue.acknowledge(message_id) == 1
+        assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
+        assert await redis.xlen(queue.stream_name) == 0
+    assert len(executions) == 1

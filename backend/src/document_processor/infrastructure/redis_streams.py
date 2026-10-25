@@ -2,7 +2,8 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from types import TracebackType
+from typing import Protocol, Self, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -16,7 +17,26 @@ class StreamMessage:
     delivery_count: int
 
 
+class AcknowledgementPipeline(Protocol):
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    def xack(self, name: str, groupname: str, *ids: str) -> Self: ...
+
+    def xdel(self, name: str, *ids: str) -> Self: ...
+
+    async def execute(self) -> list[int]: ...
+
+
 class AsyncStreamRedis(Protocol):
+    def pipeline(self, *, transaction: bool = True) -> AcknowledgementPipeline: ...
+
     async def xgroup_create(
         self,
         name: str,
@@ -35,8 +55,6 @@ class AsyncStreamRedis(Protocol):
         count: int,
         block: int,
     ) -> object: ...
-
-    async def xack(self, name: str, groupname: str, *ids: str) -> int: ...
 
     async def xautoclaim(
         self,
@@ -103,7 +121,11 @@ class RedisStreamQueue:
         return await self._messages(entries)
 
     async def acknowledge(self, message_id: str) -> int:
-        return await self._redis.xack(self.stream_name, self.group_name, message_id)
+        async with self._redis.pipeline(transaction=True) as pipeline:
+            pipeline.xack(self.stream_name, self.group_name, message_id)
+            pipeline.xdel(self.stream_name, message_id)
+            results = await pipeline.execute()
+        return results[0]
 
     async def reclaim_stale(
         self,
