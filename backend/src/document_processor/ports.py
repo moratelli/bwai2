@@ -33,15 +33,6 @@ class DocumentRepository(DocumentReader, Protocol):
 
     async def get_source(self, document_id: UUID) -> bytes | None: ...
 
-    async def mark_processing(
-        self,
-        document_id: UUID,
-        *,
-        token: str,
-        attempt: int,
-        updated_at: datetime,
-    ) -> StateTransition: ...
-
     async def complete(
         self,
         document_id: UUID,

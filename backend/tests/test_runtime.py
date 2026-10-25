@@ -1,12 +1,17 @@
+from datetime import UTC, datetime
 from typing import Never, cast
 from uuid import uuid4
 
+import fakeredis.aioredis
 import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 from redis.asyncio import Redis
 
 from document_processor.config import Settings
+from document_processor.domain.models import DocumentStatus, NewDocument, ParserKind
+from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
+from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 from document_processor.runtime import RedisHealthProbe, build_worker, create_runtime_app
 from document_processor.worker import DocumentWorker
 
@@ -120,6 +125,51 @@ def test_runtime_settings_do_not_expose_the_retired_provider() -> None:
     assert "mistral_api_key" not in Settings.model_fields
     assert "mistral_ocr_model" not in Settings.model_fields
     assert not hasattr(Settings, "mistral_available")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size,expected", [(None, 1), (4, 2)])
+async def test_runtime_worker_fetches_one_by_default_but_keeps_batch_override(
+    batch_size: int | None,
+    expected: int,
+) -> None:
+    settings = (
+        Settings(test_summarizer_enabled=True, worker_read_block_ms=1)
+        if batch_size is None
+        else Settings(
+            test_summarizer_enabled=True, worker_read_block_ms=1, worker_batch_size=batch_size
+        )
+    )
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=False)
+    documents = [
+        NewDocument(
+            id=uuid4(),
+            filename=f"synthetic-{index}.pdf",
+            parser=ParserKind.PYPDF,
+            status=DocumentStatus.QUEUED,
+            content=b"%PDF-1.7\ncorrupt",
+            created_at=datetime.now(UTC),
+        )
+        for index in range(2)
+    ]
+    try:
+        await RedisSubmissionGateway(redis, ttl_seconds=60).create_batch(documents)
+        instance = build_worker(settings=settings, redis=redis, consumer_name="batch-test")
+
+        assert await instance.run_once() == expected
+
+        repository = RedisDocumentRepository(redis, ttl_seconds=60)
+        records = [await repository.get(document.id) for document in documents]
+        assert (
+            sum(record is not None and record.status is DocumentStatus.FAILED for record in records)
+            == expected
+        )
+        assert (
+            sum(record is not None and record.status is DocumentStatus.QUEUED for record in records)
+            == 2 - expected
+        )
+    finally:
+        await redis.aclose()
 
 
 def test_worker_concurrency_must_be_positive() -> None:

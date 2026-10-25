@@ -51,14 +51,8 @@ class ProcessingService:
         if document.status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
             return ProcessingOutcome.ALREADY_TERMINAL
 
-        started = await self._repository.mark_processing(
-            document_id,
-            token=token,
-            attempt=attempt,
-            updated_at=self._clock(),
-        )
-        if started is not StateTransition.APPLIED:
-            return ProcessingOutcome(started.value)
+        if document.status is not DocumentStatus.PROCESSING or document.attempts != attempt:
+            return ProcessingOutcome.LOST_OWNERSHIP
 
         source = await self._repository.get_source(document_id)
         if source is None:

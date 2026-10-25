@@ -16,7 +16,7 @@ from document_processor.domain.errors import (
     PermanentProcessingError,
     RetryableProcessingError,
 )
-from document_processor.domain.models import StateTransition
+from document_processor.domain.models import AttemptAdmission, AttemptsExhausted, StateTransition
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
@@ -73,6 +73,8 @@ class FakeRepository:
     lock_available: bool = True
     events: list[str] = field(default_factory=lambda: list[str]())
     release_error: Exception | None = None
+    attempts: int = 0
+    admission_error: Exception | None = None
     lease_seconds: int = 60
     renewal_result: StateTransition | Exception = StateTransition.APPLIED
     renewal_gate: asyncio.Event | None = None
@@ -80,6 +82,23 @@ class FakeRepository:
     renewals: int = 0
     release_gate: asyncio.Event | None = None
     release_finished: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def admit_attempt(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        max_attempts: int,
+        updated_at: datetime,
+    ) -> AttemptAdmission:
+        assert document_id == DOCUMENT_ID and token == LOCK_OWNER
+        assert updated_at == NOW
+        if self.admission_error is not None:
+            raise self.admission_error
+        if self.attempts >= max_attempts:
+            return AttemptsExhausted(self.attempts)
+        self.attempts += 1
+        return self.attempts
 
     async def acquire_lock(self, document_id: UUID, token: str, *, ttl_seconds: int) -> bool:
         assert document_id == DOCUMENT_ID
@@ -195,6 +214,93 @@ def worker(
         token_factory=lambda: LOCK_OWNER,
         clock=lambda: NOW,
     )
+
+
+@pytest.mark.asyncio
+async def test_redeliveries_and_lock_contention_do_not_consume_attempts() -> None:
+    async def no_sleep(_delay: float) -> None:
+        pass
+
+    queue = FakeQueue(new=(StreamMessage("1-0", DOCUMENT_ID, 99),))
+    repository = FakeRepository(lock_available=False)
+    processor = FakeProcessor(
+        [
+            RetryableProcessingError("temporary", "Try later."),
+            ProcessingOutcome.COMPLETED,
+        ]
+    )
+    instance = worker(queue, repository, processor, sleep=no_sleep)
+    await instance.run_once()
+    await instance.run_once()
+    assert repository.attempts == 0
+    assert processor.attempts == []
+    repository.lock_available = True
+
+    await instance.run_once()
+
+    assert processor.attempts == [1, 2]
+    assert repository.attempts == 2
+    assert queue.events[-1] == "ack:1-0"
+
+
+@pytest.mark.asyncio
+async def test_recovery_continues_persisted_attempts_not_delivery_count() -> None:
+    queue, repository = FakeQueue(new=(MESSAGE,)), FakeRepository(attempts=2)
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED])
+
+    await worker(queue, repository, processor).run_once()
+
+    assert processor.attempts == [3]
+    assert repository.attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_exhausted_recovery_does_not_start_a_fourth_attempt() -> None:
+    queue, repository = FakeQueue(new=(MESSAGE,)), FakeRepository(attempts=3)
+    processor = FakeProcessor([])
+
+    await worker(queue, repository, processor).run_once()
+
+    assert processor.attempts == []
+    assert repository.attempts == 3
+    assert any(event.startswith("fail:retry_exhausted:") for event in repository.events)
+    assert queue.events[-1] == "ack:1-0"
+
+
+@pytest.mark.asyncio
+async def test_admission_outage_does_not_consume_budget_or_publish_failure() -> None:
+    queue = FakeQueue(new=(MESSAGE,))
+    repository = FakeRepository(admission_error=InfrastructureUnavailableError("Document store"))
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED])
+
+    await worker(queue, repository, processor).run_once()
+
+    assert processor.attempts == []
+    assert repository.attempts == 0
+    assert queue.events == ["group"]
+    assert not any(event.startswith("fail:") for event in repository.events)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admitted_attempt_is_preserved_for_replacement() -> None:
+    repository = FakeRepository()
+    with pytest.raises(asyncio.CancelledError):
+        await worker(
+            FakeQueue(new=(MESSAGE,)),
+            repository,
+            FakeProcessor(
+                [
+                    asyncio.CancelledError(),
+                ]
+            ),
+        ).run_once()
+    assert repository.attempts == 1
+    processor = FakeProcessor([ProcessingOutcome.COMPLETED])
+
+    await worker(FakeQueue(new=(MESSAGE,)), repository, processor).run_once()
+
+    assert processor.attempts == [2]
+    assert repository.attempts == 2
 
 
 class LeasePulse:
@@ -545,6 +651,7 @@ async def test_emits_structured_content_safe_lifecycle_logs(
     assert [data.get("event") for data in record_data] == [
         "document_processing_started",
         "document_retry_scheduled",
+        "document_processing_started",
         "document_processing_completed",
     ]
     assert all(data.get("document_id") == str(DOCUMENT_ID) for data in record_data)

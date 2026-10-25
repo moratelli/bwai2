@@ -26,6 +26,14 @@ class StateTransition(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class AttemptsExhausted:
+    attempts: int
+
+
+type AttemptAdmission = int | AttemptsExhausted | StateTransition
+
+
+@dataclass(frozen=True, slots=True)
 class UploadCandidate:
     filename: str
     content_type: str

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     worker_retry_jitter_seconds: float = Field(default=0.25, ge=0)
     worker_reclaim_idle_ms: int = Field(default=30_000, gt=0)
     worker_read_block_ms: int = Field(default=5_000, gt=0)
-    worker_batch_size: int = Field(default=10, gt=0)
+    worker_batch_size: int = Field(default=1, gt=0)
     worker_lock_ttl_seconds: int = Field(default=300, gt=0)
 
     @field_validator("gemini_api_key", mode="before")

@@ -38,27 +38,6 @@ class FakeRepository:
         assert document_id == DOCUMENT_ID
         return self.source
 
-    async def mark_processing(
-        self,
-        document_id: UUID,
-        *,
-        token: str,
-        attempt: int,
-        updated_at: datetime,
-    ) -> StateTransition:
-        assert token == OWNER
-        assert document_id == DOCUMENT_ID
-        self.events.append("processing")
-        if self.record is None:
-            return StateTransition.NOT_FOUND
-        self.record = replace(
-            self.record,
-            status=DocumentStatus.PROCESSING,
-            attempts=attempt,
-            updated_at=updated_at,
-        )
-        return StateTransition.APPLIED
-
     async def complete(
         self,
         document_id: UUID,
@@ -141,7 +120,8 @@ class FakeSummarizer:
 def record(
     *,
     parser: ParserKind = ParserKind.PYPDF,
-    status: DocumentStatus = DocumentStatus.QUEUED,
+    status: DocumentStatus = DocumentStatus.PROCESSING,
+    attempts: int = 1,
 ) -> DocumentRecord:
     return DocumentRecord(
         id=DOCUMENT_ID,
@@ -150,7 +130,7 @@ def record(
         status=status,
         created_at=NOW,
         updated_at=NOW,
-        attempts=0,
+        attempts=attempts,
     )
 
 
@@ -181,7 +161,7 @@ async def test_dispatches_selected_parser_and_publishes_one_complete_result(
     )
 
     assert outcome is ProcessingOutcome.COMPLETED
-    assert repository.events == ["processing", "complete"]
+    assert repository.events == ["complete"]
     assert repository.record is not None
     assert repository.record.status is DocumentStatus.COMPLETED
     assert repository.record.pages == PAGES
@@ -195,7 +175,7 @@ async def test_dispatches_selected_parser_and_publishes_one_complete_result(
 
 @pytest.mark.asyncio
 async def test_persists_safe_permanent_parser_failure_and_deletes_source() -> None:
-    repository = FakeRepository(record())
+    repository = FakeRepository(record(attempts=2))
     parser = FakeParser(PermanentProcessingError("invalid_pdf", "Safe failure."))
     summarizer = FakeSummarizer()
 
@@ -206,7 +186,7 @@ async def test_persists_safe_permanent_parser_failure_and_deletes_source() -> No
     ).process(DOCUMENT_ID, token=OWNER, attempt=2)
 
     assert outcome is ProcessingOutcome.FAILED
-    assert repository.events == ["processing", "fail:invalid_pdf:Safe failure."]
+    assert repository.events == ["fail:invalid_pdf:Safe failure."]
     assert repository.record is not None
     assert repository.record.status is DocumentStatus.FAILED
     assert repository.record.attempts == 2
@@ -226,7 +206,7 @@ async def test_persists_safe_permanent_summary_failure() -> None:
     ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
     assert outcome is ProcessingOutcome.FAILED
-    assert repository.events == ["processing", "fail:empty_extraction:Use OCR."]
+    assert repository.events == ["fail:empty_extraction:Use OCR."]
     assert repository.source is None
     assert summarizer.calls == [PAGES]
 
@@ -243,7 +223,7 @@ async def test_propagates_retryable_failure_without_publishing_terminal_state() 
             FakeSummarizer(),
         ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
-    assert repository.events == ["processing"]
+    assert repository.events == []
     assert repository.record is not None
     assert repository.record.status is DocumentStatus.PROCESSING
     assert repository.source == PDF_BYTES
@@ -268,6 +248,25 @@ async def test_skips_terminal_redelivery_without_provider_calls() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [DocumentStatus.QUEUED, DocumentStatus.PROCESSING])
+async def test_service_rejects_work_without_the_admitted_state_and_attempt(
+    status: DocumentStatus,
+) -> None:
+    repository = FakeRepository(record(status=status))
+    parser, summarizer = FakeParser(), FakeSummarizer()
+
+    outcome = await service(repository, {ParserKind.PYPDF: parser}, summarizer).process(
+        DOCUMENT_ID,
+        token=OWNER,
+        attempt=2,
+    )
+
+    assert outcome is ProcessingOutcome.LOST_OWNERSHIP
+    assert parser.calls == [] and summarizer.calls == []
+    assert repository.events == []
+
+
+@pytest.mark.asyncio
 async def test_missing_source_becomes_safe_terminal_failure() -> None:
     repository = FakeRepository(record(), source=None)
 
@@ -279,6 +278,5 @@ async def test_missing_source_becomes_safe_terminal_failure() -> None:
 
     assert outcome is ProcessingOutcome.FAILED
     assert repository.events == [
-        "processing",
         "fail:source_missing:The uploaded PDF is no longer available.",
     ]

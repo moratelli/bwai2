@@ -104,9 +104,11 @@ poll result <── Redis terminal state <── worker pool
 
 A submission transaction stores metadata under `document:<uuid>`, raw PDF bytes under `document:<uuid>:source`, and an entry in the `documents:processing` stream. Keys expire after 24 hours by default.
 
-Workers use the `document-workers` consumer group. They reclaim stale pending messages before reading new ones, acquire `document:<uuid>:lock`, and acknowledge a stream entry only after Redis contains a terminal result. Terminal writes also delete the raw PDF. Temporary provider failures get bounded exponential retries; permanent failures are stored with safe error codes and messages.
+Workers use the `document-workers` consumer group. They reclaim stale pending messages before reading new ones and acquire `document:<uuid>:lock`. They acknowledge only after terminal publication or after observing an already-terminal or absent document. Terminal writes also delete the raw PDF. Temporary provider failures get bounded exponential retries; permanent failures are stored with safe error codes and messages.
 
-`WORKER_CONCURRENCY` controls the number of consumers inside the worker container. The default is two.
+`WORKER_CONCURRENCY` controls the number of consumers inside the worker container. The default is two. Each consumer fetches one job at a time by default; larger batches remain an explicit worker-setting override.
+
+The retry budget counts attempts admitted in a Redis transaction, not stream deliveries or lock contention. A worker restart continues the stored count. Failure before admission commits spends no attempt; a crash or lost response after that commit still spends it, even if no provider request was sent. Existing counters from the earlier implementation are preserved rather than rewritten.
 
 State changes check the current lease owner and the live document record in the same Redis transaction. Terminal writes also check the processing attempt. A stale worker cannot overwrite a result, delete another worker's source, or recreate an expired record. Processing does not extend the original retention deadline.
 

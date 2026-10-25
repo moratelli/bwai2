@@ -17,7 +17,6 @@ from document_processor.domain.models import (
     NewDocument,
     PageContent,
     ParserKind,
-    StateTransition,
 )
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 
@@ -57,13 +56,13 @@ async def repository() -> AsyncGenerator[tuple[RedisDocumentRepository, Redis]]:
 async def begin_processing(repo: RedisDocumentRepository) -> None:
     assert await repo.acquire_lock(DOCUMENT_ID, OWNER, ttl_seconds=30)
     assert (
-        await repo.mark_processing(
+        await repo.admit_attempt(
             DOCUMENT_ID,
             token=OWNER,
-            attempt=1,
+            max_attempts=3,
             updated_at=COMPLETED_AT,
         )
-        is StateTransition.APPLIED
+        == 1
     )
 
 
@@ -120,15 +119,24 @@ async def test_marks_document_processing_with_attempt_count() -> None:
         await repo.save_queued([queued_document()])
 
         assert await repo.acquire_lock(DOCUMENT_ID, OWNER, ttl_seconds=30)
-        changed = await repo.mark_processing(
+        assert (
+            await repo.admit_attempt(
+                DOCUMENT_ID,
+                token=OWNER,
+                max_attempts=3,
+                updated_at=CREATED_AT,
+            )
+            == 1
+        )
+        changed = await repo.admit_attempt(
             DOCUMENT_ID,
             token=OWNER,
-            attempt=2,
+            max_attempts=3,
             updated_at=COMPLETED_AT,
         )
         stored = await repo.get(DOCUMENT_ID)
 
-    assert changed is StateTransition.APPLIED
+    assert changed == 2
     assert stored is not None
     assert stored.status is DocumentStatus.PROCESSING
     assert stored.attempts == 2

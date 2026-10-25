@@ -11,6 +11,8 @@ from redis.asyncio import Redis
 from redis.exceptions import WatchError
 
 from document_processor.domain.models import (
+    AttemptAdmission,
+    AttemptsExhausted,
     DocumentRecord,
     DocumentStatus,
     NewDocument,
@@ -153,23 +155,38 @@ class RedisDocumentRepository:
             return source
         return source.encode()
 
-    async def mark_processing(
+    async def admit_attempt(
         self,
         document_id: UUID,
         *,
         token: str,
-        attempt: int,
+        max_attempts: int,
         updated_at: datetime,
-    ) -> StateTransition:
-        return await self._update_owned(
-            document_id,
-            token,
-            fields={
-                "status": DocumentStatus.PROCESSING.value,
-                "attempts": str(attempt),
-                "updated_at": updated_at.isoformat(),
-            },
-        )
+    ) -> AttemptAdmission:
+        with redis_error_boundary("Document store"):
+            while True:
+                async with self._redis.pipeline(transaction=True) as pipeline:
+                    try:
+                        values = await self._watch_owned_document(pipeline, document_id, token)
+                        if isinstance(values, StateTransition):
+                            return values
+                        previous = int(values["attempts"])
+                        if previous >= max_attempts:
+                            return AttemptsExhausted(previous)
+                        attempt = previous + 1
+                        pipeline.multi()
+                        pipeline.hset(
+                            self.document_key(document_id),
+                            mapping={
+                                "status": DocumentStatus.PROCESSING.value,
+                                "attempts": str(attempt),
+                                "updated_at": updated_at.isoformat(),
+                            },
+                        )
+                        await pipeline.execute()
+                        return attempt
+                    except WatchError:
+                        continue
 
     async def complete(
         self,

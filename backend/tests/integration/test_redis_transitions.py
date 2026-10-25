@@ -13,8 +13,13 @@ import fakeredis.aioredis
 import pytest
 from redis.asyncio import Redis
 from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
 
-from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
+from document_processor.domain.errors import (
+    InfrastructureUnavailableError,
+    PermanentProcessingError,
+    RetryableProcessingError,
+)
 from document_processor.domain.models import (
     DocumentStatus,
     NewDocument,
@@ -23,7 +28,10 @@ from document_processor.domain.models import (
     StateTransition,
 )
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
-from document_processor.infrastructure.redis_repository import RedisDocumentRepository
+from document_processor.infrastructure.redis_repository import (
+    AsyncRedisClient,
+    RedisDocumentRepository,
+)
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome, ProcessingService
 from document_processor.worker import DocumentWorker
@@ -71,7 +79,15 @@ async def store(request: pytest.FixtureRequest) -> AsyncGenerator[Store]:
             [document]
         )
         assert await repository.acquire_lock(document.id, OWNER, ttl_seconds=30)
-        await repository.mark_processing(document.id, token=OWNER, attempt=1, updated_at=NOW)
+        assert (
+            await repository.admit_attempt(
+                document.id,
+                token=OWNER,
+                max_attempts=3,
+                updated_at=NOW,
+            )
+            == 1
+        )
         yield Store(redis, repository, document)
     finally:
         await redis.delete(
@@ -91,12 +107,14 @@ async def transition(
 ) -> StateTransition:
     repository, identifier = store.repository, store.document.id
     if operation == "processing":
-        return await repository.mark_processing(
+        admission = await repository.admit_attempt(
             identifier,
             token=OWNER,
-            attempt=attempt,
+            max_attempts=3,
             updated_at=NOW,
         )
+        assert isinstance(admission, (int, StateTransition))
+        return StateTransition.APPLIED if isinstance(admission, int) else admission
     elif operation == "renew":
         return await repository.renew_lock(identifier, OWNER, ttl_seconds=30)
     elif operation == "complete":
@@ -274,6 +292,111 @@ async def test_renewal_cannot_reacquire_an_expired_lease(store: Store) -> None:
     assert await store.repository.get(store.document.id) == before
 
 
+async def test_concurrent_admission_assigns_distinct_persisted_attempts(
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execute = Pipeline.execute
+    arrived = 0
+    both_ready = asyncio.Event()
+
+    async def synchronize(pipeline: Pipeline, raise_on_error: bool = True) -> list[object]:
+        nonlocal arrived
+        if arrived < 2:
+            arrived += 1
+            if arrived == 2:
+                both_ready.set()
+            await both_ready.wait()
+        return cast(list[object], await execute(pipeline, raise_on_error=raise_on_error))
+
+    monkeypatch.setattr(Pipeline, "execute", synchronize)
+    async with asyncio.timeout(2):
+        admissions = await asyncio.gather(
+            *[
+                store.repository.admit_attempt(
+                    store.document.id,
+                    token=OWNER,
+                    max_attempts=3,
+                    updated_at=NOW,
+                )
+                for _ in range(2)
+            ]
+        )
+
+    assert set(admissions) == {2, 3}
+    document = await store.repository.get(store.document.id)
+    assert document is not None and document.attempts == 3
+
+
+async def test_attempt_admission_survives_worker_replacement_and_stops_at_limit(
+    store: Store,
+) -> None:
+    repository, identifier = store.repository, store.document.id
+    assert await repository.release_lock(identifier, OWNER)
+    replacement = "replacement-owner"
+    assert await repository.acquire_lock(identifier, replacement, ttl_seconds=30)
+    ttl = await store.redis.pttl(repository.document_key(identifier))
+
+    assert (
+        await repository.admit_attempt(
+            identifier, token=replacement, max_attempts=3, updated_at=NOW
+        )
+        == 2
+    )
+    assert (
+        await repository.admit_attempt(
+            identifier, token=replacement, max_attempts=3, updated_at=NOW
+        )
+        == 3
+    )
+    exhausted = await repository.admit_attempt(
+        identifier, token=replacement, max_attempts=3, updated_at=NOW
+    )
+
+    assert not isinstance(exhausted, (int, StateTransition))
+    assert exhausted.attempts == 3
+    document = await repository.get(identifier)
+    assert document is not None and document.attempts == 3
+    assert document.status is DocumentStatus.PROCESSING
+    assert 0 < await store.redis.pttl(repository.document_key(identifier)) <= ttl
+    assert await repository.get_source(identifier) == store.document.content
+
+
+@pytest.mark.parametrize("committed", [False, True])
+async def test_admission_connection_loss_preserves_only_committed_attempts(
+    store: Store,
+    committed: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execute = Pipeline.execute
+    interrupted = False
+
+    async def disconnect(pipeline: Pipeline, raise_on_error: bool = True) -> list[object]:
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            if committed:
+                await execute(pipeline, raise_on_error=raise_on_error)
+            raise RedisConnectionError("Synthetic connection loss")
+        return cast(list[object], await execute(pipeline, raise_on_error=raise_on_error))
+
+    monkeypatch.setattr(Pipeline, "execute", disconnect)
+
+    with pytest.raises(InfrastructureUnavailableError):
+        await store.repository.admit_attempt(
+            store.document.id, token=OWNER, max_attempts=3, updated_at=NOW
+        )
+
+    document = await store.repository.get(store.document.id)
+    assert document is not None and document.attempts == (2 if committed else 1)
+    assert await store.repository.admit_attempt(
+        store.document.id,
+        token=OWNER,
+        max_attempts=3,
+        updated_at=NOW,
+    ) == (3 if committed else 2)
+
+
 async def interrupt_owner(store: Store, interruption: str) -> None:
     if interruption == "expiry":
         await store.redis.delete(store.repository.document_key(store.document.id))
@@ -386,6 +509,10 @@ async def test_worker_error_handlers_respect_rejected_publication(
 ) -> None:
     before = await store.repository.get(store.document.id)
     await store.repository.release_lock(store.document.id, OWNER)
+    await cast(AsyncRedisClient, store.redis).hset(
+        store.repository.document_key(store.document.id),
+        mapping={"status": "queued", "attempts": "0"},
+    )
     queue = OneMessageQueue(store.document.id)
     worker = DocumentWorker(
         queue=queue,

@@ -12,7 +12,7 @@ from document_processor.domain.errors import (
     PermanentProcessingError,
     RetryableProcessingError,
 )
-from document_processor.domain.models import StateTransition
+from document_processor.domain.models import AttemptAdmission, AttemptsExhausted, StateTransition
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 
@@ -42,6 +42,15 @@ class WorkerQueue(Protocol):
 
 
 class WorkerRepository(Protocol):
+    async def admit_attempt(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        max_attempts: int,
+        updated_at: datetime,
+    ) -> AttemptAdmission: ...
+
     async def acquire_lock(
         self,
         document_id: UUID,
@@ -172,15 +181,6 @@ class DocumentWorker:
                 },
             )
             return
-        _LOGGER.info(
-            "document_processing_started",
-            extra={
-                "event": "document_processing_started",
-                "document_id": str(message.document_id),
-                "message_id": message.message_id,
-                "attempt": max(message.delivery_count, 1),
-            },
-        )
         processing = asyncio.create_task(self._process_with_retries(message, token))
         renewal = asyncio.create_task(self._renew_lease(message, token))
         try:
@@ -237,8 +237,49 @@ class DocumentWorker:
             return
 
     async def _process_with_retries(self, message: StreamMessage, token: str) -> None:
-        attempt = min(max(message.delivery_count, 1), self._max_attempts)
         while True:
+            try:
+                admission = await self._repository.admit_attempt(
+                    message.document_id,
+                    token=token,
+                    max_attempts=self._max_attempts,
+                    updated_at=self._clock(),
+                )
+            except InfrastructureUnavailableError:
+                _LOGGER.warning(
+                    "document_admission_unavailable",
+                    extra={
+                        "event": "document_admission_unavailable",
+                        "document_id": str(message.document_id),
+                        "message_id": message.message_id,
+                    },
+                )
+                return
+            if isinstance(admission, StateTransition):
+                if admission in {StateTransition.NOT_FOUND, StateTransition.ALREADY_TERMINAL}:
+                    await self._queue.acknowledge(message.message_id)
+                return
+            if isinstance(admission, AttemptsExhausted):
+                await self._publish_failure(
+                    message,
+                    token,
+                    admission.attempts,
+                    error_code="retry_exhausted",
+                    error_message=(
+                        f"Processing reached the retry limit ({self._max_attempts} attempts)."
+                    ),
+                )
+                return
+            attempt = admission
+            _LOGGER.info(
+                "document_processing_started",
+                extra={
+                    "event": "document_processing_started",
+                    "document_id": str(message.document_id),
+                    "message_id": message.message_id,
+                    "attempt": attempt,
+                },
+            )
             try:
                 outcome = await self._processor.process(
                     message.document_id,
@@ -269,7 +310,6 @@ class DocumentWorker:
                     },
                 )
                 await self._sleep(delay)
-                attempt += 1
             except PermanentProcessingError as error:
                 await self._publish_failure(
                     message,
