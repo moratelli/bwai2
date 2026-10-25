@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "fixture": "quality-report.pdf",
+  "synthetic": true,
+  "page_count": 2,
+  "pages": [
+    {
+      "index": 0,
+      "facts": [
+        {
+          "label": "North revenue",
+          "usd": 120000
+        },
+        {
+          "label": "South revenue",
+          "usd": 80000
+        },
+        {
+          "label": "Total revenue",
+          "usd": 200000
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "facts": [
+        {
+          "label": "Operating costs",
+          "usd": 140000
+        },
+        {
+          "label": "Operating profit",
+          "usd": 60000
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "label": "Total revenue",
+      "usd": 200000
+    },
+    {
+      "label": "Operating profit",
+      "usd": 60000
+    }
+  ]
+}
