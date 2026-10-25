@@ -18,6 +18,7 @@ from document_processor.domain.models import (
     PageContent,
     ParserKind,
 )
+from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 
 DOCUMENT_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -46,7 +47,7 @@ class FailingDocumentRedis:
 @asynccontextmanager
 async def repository() -> AsyncGenerator[tuple[RedisDocumentRepository, Redis]]:
     redis = fakeredis.aioredis.FakeRedis(decode_responses=False)
-    repo = RedisDocumentRepository(redis, ttl_seconds=86_400)
+    repo = RedisDocumentRepository(redis)
     try:
         yield repo, redis
     finally:
@@ -68,10 +69,7 @@ async def begin_processing(repo: RedisDocumentRepository) -> None:
 
 @pytest.mark.asyncio
 async def test_translates_native_redis_failure_to_safe_infrastructure_error() -> None:
-    repo = RedisDocumentRepository(
-        cast(Redis, FailingDocumentRedis()),
-        ttl_seconds=86_400,
-    )
+    repo = RedisDocumentRepository(cast(Redis, FailingDocumentRedis()))
 
     with pytest.raises(InfrastructureUnavailableError) as caught:
         await repo.get(DOCUMENT_ID)
@@ -84,7 +82,7 @@ async def test_translates_native_redis_failure_to_safe_infrastructure_error() ->
 @pytest.mark.asyncio
 async def test_saves_queued_metadata_source_and_retention() -> None:
     async with repository() as (repo, redis):
-        await repo.save_queued([queued_document()])
+        await RedisSubmissionGateway(redis, ttl_seconds=86_400).create_batch([queued_document()])
 
         stored = await repo.get(DOCUMENT_ID)
         source = await repo.get_source(DOCUMENT_ID)
@@ -115,8 +113,8 @@ async def test_returns_none_for_unknown_document_and_source() -> None:
 
 @pytest.mark.asyncio
 async def test_marks_document_processing_with_attempt_count() -> None:
-    async with repository() as (repo, _redis):
-        await repo.save_queued([queued_document()])
+    async with repository() as (repo, redis):
+        await RedisSubmissionGateway(redis, ttl_seconds=86_400).create_batch([queued_document()])
 
         assert await repo.acquire_lock(DOCUMENT_ID, OWNER, ttl_seconds=30)
         assert (
@@ -147,7 +145,7 @@ async def test_marks_document_processing_with_attempt_count() -> None:
 async def test_completes_document_and_deletes_source_atomically() -> None:
     pages = (PageContent(index=0, markdown="# First"), PageContent(index=1, markdown="Second"))
     async with repository() as (repo, redis):
-        await repo.save_queued([queued_document()])
+        await RedisSubmissionGateway(redis, ttl_seconds=86_400).create_batch([queued_document()])
         await begin_processing(repo)
         ttl_before = await redis.ttl(repo.document_key(DOCUMENT_ID))
 
@@ -177,8 +175,8 @@ async def test_completes_document_and_deletes_source_atomically() -> None:
 
 @pytest.mark.asyncio
 async def test_fails_document_and_deletes_source_atomically() -> None:
-    async with repository() as (repo, _redis):
-        await repo.save_queued([queued_document()])
+    async with repository() as (repo, redis):
+        await RedisSubmissionGateway(redis, ttl_seconds=86_400).create_batch([queued_document()])
 
         await begin_processing(repo)
         await repo.fail(

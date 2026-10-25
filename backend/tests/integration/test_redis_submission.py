@@ -132,7 +132,7 @@ async def test_submission_translates_native_redis_failure_to_safe_error() -> Non
 async def test_submission_persists_documents_and_stream_entries_atomically(
     redis_client: Redis,
 ) -> None:
-    repository = RedisDocumentRepository(redis_client, ttl_seconds=86_400)
+    repository = RedisDocumentRepository(redis_client)
     queue = RedisStreamQueue(
         redis_client,
         stream_name="integration:documents",

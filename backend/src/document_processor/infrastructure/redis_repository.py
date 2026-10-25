@@ -15,7 +15,6 @@ from document_processor.domain.models import (
     AttemptsExhausted,
     DocumentRecord,
     DocumentStatus,
-    NewDocument,
     PageContent,
     ParserKind,
     StateTransition,
@@ -41,8 +40,6 @@ class AsyncRedisPipeline(Protocol):
 
     def expire(self, name: str, ttl_seconds: int) -> Self: ...
 
-    def set(self, name: str, value: RedisValue, *, ex: int) -> Self: ...
-
     def delete(self, *names: str) -> Self: ...
 
     async def execute(self) -> list[object]: ...
@@ -65,8 +62,6 @@ class AsyncRedisClient(Protocol):
 
     async def get(self, name: str) -> bytes | str | None: ...
 
-    async def exists(self, name: str) -> int: ...
-
     async def hset(self, name: str, *, mapping: Mapping[str, RedisValue]) -> int: ...
 
     async def set(
@@ -82,9 +77,8 @@ class AsyncRedisClient(Protocol):
 class RedisDocumentRepository:
     """Persist document state and transient PDF bytes with bounded retention."""
 
-    def __init__(self, redis: Redis, *, ttl_seconds: int) -> None:
+    def __init__(self, redis: Redis) -> None:
         self._redis = cast(AsyncRedisClient, redis)
-        self._ttl_seconds = ttl_seconds
 
     @staticmethod
     def document_key(document_id: UUID) -> str:
@@ -97,31 +91,6 @@ class RedisDocumentRepository:
     @staticmethod
     def lock_key(document_id: UUID) -> str:
         return f"document:{document_id}:lock"
-
-    async def save_queued(self, documents: Sequence[NewDocument]) -> None:
-        with redis_error_boundary("Document store"):
-            async with self._redis.pipeline(transaction=True) as pipeline:
-                for document in documents:
-                    key = self.document_key(document.id)
-                    pipeline.hset(
-                        key,
-                        mapping={
-                            "id": str(document.id),
-                            "filename": document.filename,
-                            "parser": document.parser.value,
-                            "status": document.status.value,
-                            "created_at": document.created_at.isoformat(),
-                            "updated_at": document.created_at.isoformat(),
-                            "attempts": "0",
-                        },
-                    )
-                    pipeline.expire(key, self._ttl_seconds)
-                    pipeline.set(
-                        self.source_key(document.id),
-                        document.content,
-                        ex=self._ttl_seconds,
-                    )
-                await pipeline.execute()
 
     async def get(self, document_id: UUID) -> DocumentRecord | None:
         with redis_error_boundary("Document store"):

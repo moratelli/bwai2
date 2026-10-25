@@ -1,17 +1,36 @@
 """Integration tests for Redis Streams queue behavior."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import UUID
 
 import fakeredis.aioredis
 import pytest
 from redis.asyncio import Redis
 
+from document_processor.domain.models import DocumentStatus, NewDocument, ParserKind
+from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
 from document_processor.infrastructure.redis_streams import RedisStreamQueue
 
 FIRST_ID = UUID("00000000-0000-4000-8000-000000000001")
 SECOND_ID = UUID("00000000-0000-4000-8000-000000000002")
+
+
+async def enqueue(redis: Redis, identifiers: Sequence[UUID]) -> None:
+    await RedisSubmissionGateway(redis, ttl_seconds=60, stream_name="test:documents").create_batch(
+        [
+            NewDocument(
+                id=identifier,
+                filename=f"{identifier}.pdf",
+                parser=ParserKind.PYPDF,
+                status=DocumentStatus.QUEUED,
+                content=b"%PDF-1.7\nfixture",
+                created_at=datetime(2026, 10, 23, tzinfo=UTC),
+            )
+            for identifier in identifiers
+        ]
+    )
 
 
 @asynccontextmanager
@@ -41,12 +60,12 @@ async def test_creates_consumer_group_idempotently() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publishes_a_batch_in_one_transaction() -> None:
-    async with queue() as (stream_queue, redis):
-        message_ids = await stream_queue.publish_batch([FIRST_ID, SECOND_ID])
+async def test_submission_enqueues_a_complete_batch() -> None:
+    async with queue() as (_stream_queue, redis):
+        await enqueue(redis, [FIRST_ID, SECOND_ID])
         entries = await redis.xrange("test:documents")
 
-    assert len(message_ids) == 2
+    assert len({message_id for message_id, _fields in entries}) == 2
     assert len(entries) == 2
     assert [fields[b"document_id"] for _message_id, fields in entries] == [
         str(FIRST_ID).encode(),
@@ -58,7 +77,7 @@ async def test_publishes_a_batch_in_one_transaction() -> None:
 async def test_reads_and_acknowledges_new_messages() -> None:
     async with queue() as (stream_queue, redis):
         await stream_queue.ensure_group()
-        await stream_queue.publish_batch([FIRST_ID])
+        await enqueue(redis, [FIRST_ID])
 
         messages = await stream_queue.read_new("worker-one", count=10, block_ms=1)
         pending_before = await redis.xpending("test:documents", "test-workers")
@@ -75,9 +94,9 @@ async def test_reads_and_acknowledges_new_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_reclaims_stale_pending_message_for_another_consumer() -> None:
-    async with queue() as (stream_queue, _redis):
+    async with queue() as (stream_queue, redis):
         await stream_queue.ensure_group()
-        await stream_queue.publish_batch([FIRST_ID])
+        await enqueue(redis, [FIRST_ID])
         original = await stream_queue.read_new("worker-one", count=1, block_ms=1)
 
         reclaimed = await stream_queue.reclaim_stale(
@@ -93,9 +112,9 @@ async def test_reclaims_stale_pending_message_for_another_consumer() -> None:
 
 @pytest.mark.asyncio
 async def test_acknowledged_redelivery_is_not_reclaimed_again() -> None:
-    async with queue() as (stream_queue, _redis):
+    async with queue() as (stream_queue, redis):
         await stream_queue.ensure_group()
-        await stream_queue.publish_batch([FIRST_ID])
+        await enqueue(redis, [FIRST_ID])
         await stream_queue.read_new("worker-one", count=1, block_ms=1)
         reclaimed = await stream_queue.reclaim_stale(
             "worker-two",

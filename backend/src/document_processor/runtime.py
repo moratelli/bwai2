@@ -49,10 +49,7 @@ def create_runtime_app(
     """Create the API with concrete Redis-backed dependencies."""
     app_settings = settings or Settings()
     client = redis or create_redis(app_settings)
-    repository = RedisDocumentRepository(
-        client,
-        ttl_seconds=app_settings.document_ttl_seconds,
-    )
+    repository = RedisDocumentRepository(client)
     gateway = RedisSubmissionGateway(
         client,
         ttl_seconds=app_settings.document_ttl_seconds,
@@ -101,10 +98,7 @@ def build_worker(
         raise RuntimeError("GEMINI_API_KEY is required by the document worker")
 
     parser_registry: ParserRegistry = parsers
-    repository = RedisDocumentRepository(
-        redis,
-        ttl_seconds=settings.document_ttl_seconds,
-    )
+    repository = RedisDocumentRepository(redis)
     queue = RedisStreamQueue(
         redis,
         stream_name=settings.stream_name,

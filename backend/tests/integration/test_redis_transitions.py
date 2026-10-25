@@ -72,7 +72,7 @@ async def store(request: pytest.FixtureRequest) -> AsyncGenerator[Store]:
         content=b"%PDF-1.7\nsynthetic",
         created_at=NOW,
     )
-    repository = RedisDocumentRepository(redis, ttl_seconds=30)
+    repository = RedisDocumentRepository(redis)
     stream = f"test-transitions:{document.id}"
     try:
         await RedisSubmissionGateway(redis, ttl_seconds=30, stream_name=stream).create_batch(

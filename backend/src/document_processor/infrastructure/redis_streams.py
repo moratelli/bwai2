@@ -2,8 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from types import TracebackType
-from typing import Protocol, Self, cast
+from typing import Protocol, cast
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -17,24 +16,7 @@ class StreamMessage:
     delivery_count: int
 
 
-class AsyncStreamPipeline(Protocol):
-    async def __aenter__(self) -> Self: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
-
-    def xadd(self, name: str, fields: Mapping[str, str]) -> Self: ...
-
-    async def execute(self) -> list[object]: ...
-
-
 class AsyncStreamRedis(Protocol):
-    def pipeline(self, *, transaction: bool = True) -> AsyncStreamPipeline: ...
-
     async def xgroup_create(
         self,
         name: str,
@@ -102,15 +84,6 @@ class RedisStreamQueue:
         except ResponseError as error:
             if "BUSYGROUP" not in str(error):
                 raise
-
-    async def publish_batch(self, document_ids: Sequence[UUID]) -> tuple[str, ...]:
-        if not document_ids:
-            return ()
-        async with self._redis.pipeline(transaction=True) as pipeline:
-            for document_id in document_ids:
-                pipeline.xadd(self.stream_name, {"document_id": str(document_id)})
-            results = await pipeline.execute()
-        return tuple(self._as_text(result) for result in results)
 
     async def read_new(
         self,

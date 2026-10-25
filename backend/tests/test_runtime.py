@@ -158,7 +158,7 @@ async def test_runtime_worker_fetches_one_by_default_but_keeps_batch_override(
 
         assert await instance.run_once() == expected
 
-        repository = RedisDocumentRepository(redis, ttl_seconds=60)
+        repository = RedisDocumentRepository(redis)
         records = [await repository.get(document.id) for document in documents]
         assert (
             sum(record is not None and record.status is DocumentStatus.FAILED for record in records)
