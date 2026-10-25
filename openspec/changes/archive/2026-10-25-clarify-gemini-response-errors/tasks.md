@@ -17,6 +17,10 @@
 - All disposable test containers and volumes were removed. Existing container IDs and private `.env` size/mtime/inode metadata remained unchanged. No provider calls or customer-document copies were made.
 - Targeted diagnostics found no language/type errors. Nine auxiliary `no-ellipsis-body` warnings describe intentional Protocol declarations; no source suppression or unrelated cleanup was added. The session error view was empty apart from its existing disposition caveat. `git diff --check` passed.
 
+## Final review evidence
+
+At reviewed head `82b48d881a3c33a064aa4fa62aaf626457023bb1`, report-only OpenSpec verification confirmed the completed task, the added requirement, all 10 scenarios and both design decisions. No semantic checks were skipped and no gaps were found. Fresh-context GPT-5.6 Sol high and Claude Opus 4.8 high reviews both returned `[]`. This was a normal, scoped runtime change; Pedro explicitly requested both reviewers. Final verdict: PASS, with no findings to fix or defer. Strict active validation passed all 6 items. The approved spec synchronization is the remaining archive action; runtime verification above remains valid because only this evidence record changes after review.
+
 ## Workflow follow-up
 
 - Run the installed report-only `openspec-verify-change` workflow against this active change.
