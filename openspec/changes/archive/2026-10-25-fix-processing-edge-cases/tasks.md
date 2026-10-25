@@ -38,6 +38,12 @@ Focused Python gates for tasks 1-3: `uv run --project backend ruff check backend
   - Reconcile only the three requested fixes. Do not expand into queue admission, batching, broad fault campaigns, UI redesign, infrastructure or new evaluation tooling.
   - Evidence: fresh `make check` passes 401 backend tests without skips, 23 frontend tests, API drift, Ruff/Oxlint, formatting, both mypy targets, both TypeScript checks and both builds. Disposable `make smoke` passes HTTP checks plus 10 concurrent uploads (9 complete, 1 expected failure); Chromium passes 1 test. All owned containers, networks and volumes are removed. Original container IDs, private `.env` metadata and primary HEAD remain unchanged. Targeted LSP checks confirmed 14/16 paths, with 2 inconclusive and no reported type errors; 19 Protocol false positives and 1 unchanged deferred parsing warning remain separately recorded. Session diagnostics and diff checks were inspected. No live provider requests or customer documents were used.
 
+## Final verification and review
+
+- Report-only OpenSpec verification at `d801669d90bb0b239c170075461b8463ca537ee4` passed: 4/4 tasks, 2/2 added requirements, 15/15 scenarios and 3/3 design decisions. The canonical permanent-parser-failure behavior is restored. No semantic findings or skipped semantic checks remain.
+- Independent Astra max and Opus high reviews of `f87c1ad..d801669` returned no findings. Opus supplied one format-only correction; neither review nor tests were repeated. Final verdict: PASS. No runtime fix wave was needed.
+- The architecture check passed using the unchanged authority evidence. Only the approved requirement synchronization remains for archival. The diagnostic limitations recorded above are unchanged.
+
 ## Workflow follow-up
 
 - Run the installed `openspec-verify-change` workflow once, report-only, against the completed active change. Verify all proposed scenarios and the restored canonical permanent-parser-failure contract.
