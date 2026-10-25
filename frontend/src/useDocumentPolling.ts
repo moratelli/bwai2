@@ -39,7 +39,9 @@ export function useDocumentPolling(
     (accepted: readonly AcceptedDocument[]) => {
       const current = store.get(documentsAtom);
       const byId = new Map(current.map((document) => [document.id, document]));
-      for (const document of accepted) byId.set(document.id, document);
+      for (const document of accepted) {
+        if (!byId.has(document.id)) byId.set(document.id, document);
+      }
       setDocuments([...byId.values()]);
       setTrackedIds((tracked) => [...new Set([...tracked, ...accepted.map(({ id }) => id)])]);
       setPollError(null);

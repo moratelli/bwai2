@@ -111,6 +111,11 @@ describe("useDocumentPolling", () => {
     expect(getDocument).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
 
+    act(() => result.current.track([first]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(getDocument).toHaveBeenCalledTimes(1);
+    expect(result.current.documents[0]?.status).toBe("unavailable");
+
     getDocument.mockResolvedValueOnce(resource(second, "completed"));
     act(() => result.current.track([second]));
     await act(() => vi.advanceTimersByTimeAsync(1_000));
