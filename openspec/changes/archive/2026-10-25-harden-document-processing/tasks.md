@@ -72,6 +72,10 @@ make -n live-quality >/dev/null
 
 These checks use the existing Docker, Bash, and Make prerequisites; they do not require ShellCheck or shfmt. The independent plan review returned one low-severity finding about unspecified verification tooling and no blockers. The explicit commands resolve that ambiguity. The pinned workflow command was verified against the current workflow; the new Make target will be checked when task 4.3 creates it.
 
+## Final review evidence
+
+At reviewed head `67a376cf0871cfd0a95be434b3105e4e70c78137`, report-only OpenSpec verification mapped all 11 tasks, 9 changed requirements and 44 scenarios, with all 8 design decisions followed and no semantic gaps. Fresh-context Sol high and Opus high reviews both returned `[]`; final verdict: PASS, with no fix wave required. Strict active validation passed all 6 items. The targeted LSP probe confirmed 28 files clean and left 4 unconfirmed; the fresh project gates recorded above passed. Canonical-spec synchronization remains the approved archive action, not a runtime discrepancy.
+
 ## Workflow follow-up
 
 - Run the installed OpenSpec apply/verification instructions as appropriate; after all tasks, perform report-only semantic verification once, then the risk-tiered final implementation review. Keep the normal single-review/fix budget; do not rerun the entire hiring assessment.
