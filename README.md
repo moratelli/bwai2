@@ -97,6 +97,14 @@ Readiness does not contact Gemini. A `configured` result means a key was supplie
 
 FastAPI owns the OpenAPI contract. The generated schema lives at `frontend/openapi.json`; `openapi-typescript` turns it into `frontend/src/generated/api.ts`. Runtime parsing in the frontend still validates untrusted JSON before it enters Jotai state.
 
+### Retry information in results
+
+A processing result can include `retry_wait.until` and `retry_wait.cause`. The timestamp is a not-before time, not a promise that a request will start then. The cause identifies Gemini, the extraction or summarization stage, the failed attempt, and one of `rate_limited`, `unavailable`, `timeout`, `connection_error`, or `temporary_failure`. A known HTTP status is included; missing status information is not inferred.
+
+An exhausted result keeps `error.code: retry_exhausted` and can include the same cause under `error.cause`. Compare its `attempt` with the document's `attempts`: an earlier value is last-confirmed evidence, not a diagnosis of the interrupted final attempt. Permanent document errors keep their existing messages without an unrelated provider cause.
+
+These fields are optional. Legacy results remain valid, resumed attempts omit their old wait, and terminal results have no wait. Submission, readiness, and lookup error envelopes are unchanged.
+
 ## Architecture and Redis flow
 
 ```text
