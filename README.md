@@ -42,6 +42,14 @@ Summarization also rejects a consumed response marked `MAX_TOKENS`, even if it c
 
 These diagnostics apply to new processing after the worker is updated. Existing failed records keep their stored message.
 
+### Gemini request budget
+
+Every production extraction, summary chunk, reduction, and synthesis request passes through a Redis admission gate. The default is 12 requests per minute, spaced at least five seconds apart at admission. SDK automatic retries are disabled so they cannot bypass that accounting. Local PyPDF extraction and the test summarizer do not consume permits.
+
+Cooperating workers must share Redis, model, `GEMINI_RATE_LIMIT_SCOPE`, and the configured RPM. A conflicting budget or uncertain Redis operation fails closed. Waiting clients recheck the gate instead of reserving future slots, and restarts do not reset it. When changing a scope's budget, stop its workers and allow its admission/cooldown state to expire before starting the matching configuration. Never change scopes to evade an active cooldown.
+
+This is application admission pacing, not a guarantee about request arrival times or provider availability. Other clients and separate Redis deployments can still consume the project's quota. The app does not proactively enforce input-token or daily quotas. It records returned token usage when available; missing usage is unknown, not zero.
+
 ### Why Mistral OCR was removed
 
 Mistral OCR was removed because the available free Mistral Studio account had zero execution quota. The API key authenticated, but OCR requests returned HTTP 429 with an allowed rate of zero requests per minute. We therefore could not run and verify the integration and retained PyPDF and Gemini.
@@ -141,9 +149,18 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
   "attempt": 1,
   "outcome": null,
   "error_code": "gemini_temporarily_unavailable",
-  "delay_seconds": 2.0
+  "delay_seconds": 2.0,
+  "provider": null,
+  "provider_category": null,
+  "provider_stage": null,
+  "http_status": null,
+  "duration_ms": null,
+  "prompt_token_count": null,
+  "candidates_token_count": null
 }
 ```
+
+`gemini_request_completed` and `gemini_request_failed` events report the stage, duration, known HTTP status, and safe provider category when available. Completed requests can include returned prompt/output token counts. These events can lack document context; they never include prompts, generated text, raw headers, or provider response bodies.
 
 ## Configuration
 
@@ -154,6 +171,8 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
 | `APP_PORT` | `8080` | Localhost port for Nginx |
 | `GEMINI_API_KEY` | empty | Required for normal submissions and all normal summaries |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Gemini extraction and summary model |
+| `GEMINI_REQUESTS_PER_MINUTE` | `12` | Shared generation admission budget, 1–1000 |
+| `GEMINI_RATE_LIMIT_SCOPE` | `bwai2` | Nonsecret shared label: 1–64 ASCII letters, digits, `_` or `-` |
 | `DOCUMENT_TTL_SECONDS` | `86400` | Redis retention for document records |
 | `MAX_FILES_PER_BATCH` | `10` | Atomic batch limit |
 | `MAX_FILE_SIZE_BYTES` | `20971520` | Per-file limit, 20 MiB by default |
@@ -277,7 +296,7 @@ This is a take-home service, not a multi-tenant document platform.
 - Redis is both the queue and temporary record store; data expires rather than moving to durable object storage.
 - The API holds each bounded upload in memory before the atomic Redis transaction.
 - Result delivery uses polling, not WebSockets or server-sent events.
-- There is no authentication, rate limiting, malware scanning, or per-user isolation.
+- There is no authentication, incoming API rate limiting, malware scanning, or per-user isolation.
 - PyPDF does not OCR image-only pages. Rich Markdown uses Gemini's visual PDF processing, but scan quality can limit extraction.
 - Local records from an older parser configuration are not migrated. Start a new test stack, or remove old Redis data only when it is disposable.
 - Provider-backed results depend on external availability and credentials. The smoke summarizer proves orchestration only; it is not a production fallback.

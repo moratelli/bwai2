@@ -19,7 +19,7 @@ _RETRYABLE_STATUS_CODES = {408, 409, 429}
 MAX_RETRY_HINT_SECONDS = 86_400
 
 
-def _http_status(error: Exception) -> int | None:
+def provider_http_status(error: Exception) -> int | None:
     for attribute in ("code", "status_code"):
         status = getattr(error, attribute, None)
         if type(status) is int and 100 <= status <= 599:
@@ -86,7 +86,7 @@ def classify_gemini_error(
     """
     if isinstance(error, DocumentProcessorError):
         return error
-    status = _http_status(error)
+    status = provider_http_status(error)
     category: ProviderCategory | None = None
     if status == 429:
         category = "rate_limited"

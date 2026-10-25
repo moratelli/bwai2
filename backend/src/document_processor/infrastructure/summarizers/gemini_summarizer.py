@@ -8,7 +8,8 @@ from google.genai import types
 
 from document_processor.domain.errors import PermanentProcessingError
 from document_processor.domain.models import PageContent
-from document_processor.infrastructure.provider_errors import classify_gemini_error
+from document_processor.infrastructure.gemini_requests import request_gemini
+from document_processor.ports import ProviderRequestGate
 
 
 class GeminiSummaryResponse(Protocol):
@@ -49,15 +50,20 @@ class GeminiSummarizer:
         chunk_size: int,
         client: object | None = None,
         api_key: str | None = None,
+        request_gate: ProviderRequestGate | None = None,
     ) -> None:
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         if client is None:
             if api_key is None:
                 raise ValueError("api_key is required when no Gemini client is supplied")
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+            )
         self._client = cast(GeminiSummaryClient, client)
         self._model = model
+        self._request_gate = request_gate
         self._chunk_size = chunk_size
 
     async def summarize(self, pages: Sequence[PageContent]) -> str:
@@ -158,14 +164,15 @@ class GeminiSummarizer:
         if len(content) > self._chunk_size:
             raise self._too_large()
         prompt = f"{instruction}\n\n{content}"
-        try:
-            response = await self._client.aio.models.generate_content(
+        response = await request_gemini(
+            lambda: self._client.aio.models.generate_content(
                 model=self._model,
                 contents=prompt,
                 config=types.GenerateContentConfig(temperature=0),
-            )
-        except Exception as error:
-            raise classify_gemini_error(error, "summarization") from error
+            ),
+            stage="summarization",
+            gate=self._request_gate,
+        )
         candidates = response.candidates
         if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
             raise PermanentProcessingError(

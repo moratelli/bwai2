@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from document_processor.domain.errors import PermanentProcessingError
 from document_processor.domain.models import PageContent
+from document_processor.infrastructure.gemini_requests import request_gemini
 from document_processor.infrastructure.parsers.pdf_validation import source_page_count
-from document_processor.infrastructure.provider_errors import classify_gemini_error
+from document_processor.ports import ProviderRequestGate
 
 _EXTRACTION_PROMPT = """Convert every PDF page to faithful Markdown.
 Return one item per source page in source order. Use zero-based, contiguous page indexes.
@@ -88,13 +89,18 @@ class GeminiPdfParser:
         model: str,
         client: object | None = None,
         api_key: str | None = None,
+        request_gate: ProviderRequestGate | None = None,
     ) -> None:
         if client is None:
             if api_key is None:
                 raise ValueError("api_key is required when no Gemini client is supplied")
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+            )
         self._client = cast(GeminiClient, client)
         self._model = model
+        self._request_gate = request_gate
 
     async def parse(self, content: bytes) -> tuple[PageContent, ...]:
         expected_page_count = await asyncio.to_thread(source_page_count, content)
@@ -107,14 +113,15 @@ class GeminiPdfParser:
             response_schema=GEMINI_DOCUMENT_SCHEMA,
             temperature=0,
         )
-        try:
-            response = await self._client.aio.models.generate_content(
+        response = await request_gemini(
+            lambda: self._client.aio.models.generate_content(
                 model=self._model,
                 contents=contents,
                 config=config,
-            )
-        except Exception as error:
-            raise classify_gemini_error(error, "extraction") from error
+            ),
+            stage="extraction",
+            gate=self._request_gate,
+        )
         candidates = response.candidates
         if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
             raise PermanentProcessingError(

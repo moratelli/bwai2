@@ -15,6 +15,7 @@ from document_processor.domain.errors import (
 )
 from document_processor.domain.models import AttemptAdmission, AttemptsExhausted, StateTransition
 from document_processor.infrastructure.redis_streams import StreamMessage
+from document_processor.ports import ProviderRequestGate
 from document_processor.services.processing import ProcessingOutcome
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,9 +120,11 @@ class DocumentWorker:
         random: Callable[[], float],
         token_factory: Callable[[], str] = lambda: str(uuid4()),
         clock: Callable[[], datetime] | None = None,
+        provider_gate: ProviderRequestGate | None = None,
     ) -> None:
         if max_attempts <= 0:
             raise ValueError("max_attempts must be positive")
+        self._provider_gate = provider_gate
         self._queue = queue
         self._repository = repository
         self._processor = processor

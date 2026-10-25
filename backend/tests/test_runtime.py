@@ -172,6 +172,51 @@ async def test_runtime_worker_fetches_one_by_default_but_keeps_batch_override(
         await redis.aclose()
 
 
+def test_runtime_shares_one_gate_between_worker_and_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, dict[str, object]] = {}
+
+    def capture(name: str) -> object:
+        def factory(**kwargs: object) -> object:
+            captured[name] = kwargs
+            return object()
+
+        return factory
+
+    for name in ("GeminiPdfParser", "GeminiSummarizer", "DocumentWorker"):
+        monkeypatch.setattr("document_processor.runtime." + name, capture(name))
+    build_worker(
+        settings=Settings(gemini_api_key=SecretStr("test-only")),
+        redis=cast(Redis, FakeRedis()),
+        consumer_name="worker",
+    )
+    gate = captured["GeminiPdfParser"]["request_gate"]
+    assert gate is not None
+    assert captured["GeminiSummarizer"]["request_gate"] is gate
+    assert captured["DocumentWorker"]["provider_gate"] is gate
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"gemini_requests_per_minute": 0},
+        {"gemini_requests_per_minute": 1001},
+        {"gemini_rate_limit_scope": ""},
+        {"gemini_rate_limit_scope": "a:b"},
+    ],
+)
+def test_invalid_admission_settings_are_rejected(values: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(values)
+
+
+def test_default_admission_settings_leave_headroom() -> None:
+    settings = Settings()
+    assert settings.gemini_requests_per_minute == 12
+    assert settings.gemini_rate_limit_scope == "bwai2"
+
+
 def test_worker_concurrency_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         Settings(worker_concurrency=0)
