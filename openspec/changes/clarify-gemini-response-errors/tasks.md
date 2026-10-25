@@ -1,0 +1,18 @@
+# Tasks
+
+## 1. Explain rejected responses
+
+- [ ] 1.1 Add evidence-based Gemini response messages without changing the error code, requests, retries or completeness policy; land the regression tests and README explanation together. Write and run the failing adapter tests first, implement the smallest passing change, then verify the full boundary and project gates below before committing code, tests, docs and this task's evidence together.
+  - Cover `MAX_TOKENS` precedence (including empty, malformed and apparently complete text), missing/empty/whitespace text, malformed JSON, invalid schema including an empty page array, too few/many pages, duplicate/one-based/gapped/reordered indexes, missing/unrecognized finish metadata and unused candidate metadata. Include actual SDK response objects and a synthetic valid 240-page response. Keep existing transport-error and successful-extraction tests.
+  - Exercise the actual adapter through processing/result tests: preserve `invalid_provider_response`, persist the specific safe message, skip summarization and publish no partial pages. Include synthetic sensitive strings in rejected payloads and metadata; verify that errors, result JSON and emitted logs do not contain them. Reuse the existing App failure-message rendering test; no frontend behavior change is expected.
+  - Document single-response extraction, the upload-size/output-capacity distinction and the limits of the small quality fixture. Do not claim a verified cause for historical failures or add an arbitrary page limit. Use no customer PDF, text, filename or local path in artifacts.
+  - Focused GREEN: `uv run --project backend pytest backend/tests/unit/test_gemini_parser.py backend/tests/unit/test_processing.py backend/tests/api/test_document_results.py backend/tests/unit/test_worker_logging.py`; `uv run --project backend ruff check backend scripts`; `uv run --project backend ruff format --check backend scripts`; `uv run --project backend mypy backend/src backend/tests`; `uv run --project backend mypy --strict scripts`.
+  - After the last implementation edit, run `TEST_REDIS_URL=<disposable Redis 7 URL> make check` with no real-Redis skips. Run `make smoke` and `make browser-e2e` with an empty `GEMINI_API_KEY`, test summarization, a new `COMPOSE_PROJECT_NAME` and an unused `APP_PORT` with matching `APP_URL`. Remove only those test resources and confirm the owner stack is unchanged. Probe changed source files with LSP and inspect session diagnostics; record inconclusive/advisory outcomes separately from project gates. Run `git diff --check`.
+
+## Workflow follow-up
+
+- Run the installed report-only `openspec-verify-change` workflow against this active change.
+- At Pedro's request, run one fresh-context Sol high and one Opus high final review in parallel over the immutable implementation diff and relevant callers. Apply the normal single fix-wave policy for demonstrated critical/high findings; do not add an unrelated whole-platform review.
+- Run `openspec validate --all --strict --no-interactive` while active, then `openspec archive clarify-gemini-response-errors -y` under the completed-change approval. Verify exact delta synchronization and strict validation afterward.
+- Rebuild and inspect the source ZIP, push `dev`, verify exact-head CI and update existing PR #1. Leave it open without auto-merge; do not update `main` or rebuild the existing owner stack. Do not change the default PR title/body.
+- Do not run live provider checks or resubmit the internal document. This change fixes diagnostic ambiguity, not the historical extraction failure or large-document support.
