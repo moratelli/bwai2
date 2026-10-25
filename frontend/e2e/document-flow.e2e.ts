@@ -27,7 +27,9 @@ test("uploads a PDF and renders its completed result", async ({ page }) => {
   await expect(result).toHaveAttribute("data-status", "completed", {
     timeout: 90_000,
   });
-  await expect(page.getByRole("status")).toHaveText("All documents have finished processing.");
+  await expect(page.getByRole("status")).toHaveText(
+    "1 completed · 0 failed · 0 active · 0 unavailable",
+  );
   await expect(result.getByRole("heading", { name: "Smoke-test summary" })).toBeVisible();
 
   const firstPage = result.locator("details").first();

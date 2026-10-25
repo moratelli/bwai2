@@ -93,7 +93,7 @@ describe("App", () => {
     await waitFor(() => expect(client.submitDocuments).toHaveBeenCalledTimes(1));
     expect(client.submitDocuments).toHaveBeenCalledWith([expect.any(File)], "gemini");
     expect(screen.getByRole("heading", { name: "report.pdf" })).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent("1 document queued");
+    expect(screen.getByRole("status")).toHaveTextContent("1 active");
   });
 
   it("rejects obvious invalid file selections before submission", () => {
@@ -152,7 +152,7 @@ describe("App", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Document not found or expired.");
     expect(screen.getByRole("alert")).toHaveTextContent("Upload it again");
-    expect(screen.getByRole("status")).toHaveTextContent("results are unavailable");
+    expect(screen.getByRole("status")).toHaveTextContent("1 unavailable");
     expect(screen.getByRole("status")).not.toHaveTextContent("All documents have finished");
   });
 

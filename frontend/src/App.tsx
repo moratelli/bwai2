@@ -3,7 +3,7 @@ import type { ChangeEvent, SyntheticEvent } from "react";
 import ReactMarkdown from "react-markdown";
 
 import { ApiError, DocumentApi } from "./api";
-import type { DocumentClient, ParserKind, TrackedDocument } from "./api";
+import type { DocumentClient, ParserKind, ProviderCause, TrackedDocument } from "./api";
 import { parserOptions } from "./parserOptions";
 import { useDocumentPolling } from "./useDocumentPolling";
 
@@ -150,6 +150,7 @@ export function App({ client = defaultClient }: AppProps) {
 }
 
 function DocumentCard({ document }: { document: TrackedDocument }) {
+  const wait = document.status === "processing" ? document.retry_wait : null;
   return (
     <article
       aria-labelledby={`document-${document.id}`}
@@ -158,8 +159,23 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
     >
       <header className="result-header">
         <h2 id={`document-${document.id}`}>{document.filename}</h2>
-        <p className="status-pill">{document.status}</p>
+        <p className="status-pill">{wait ? "retry scheduled" : document.status}</p>
       </header>
+
+      {wait && (
+        <div className="retry-block" aria-live="polite">
+          <h3>Waiting to retry Gemini</h3>
+          <CauseDetails
+            cause={wait.cause}
+            attempts={document.status === "processing" ? document.attempts : 0}
+          />
+          <p>
+            Retry scheduled no earlier than{" "}
+            <time dateTime={wait.until}>{new Date(wait.until).toLocaleString()}</time>. Processing
+            may start later.
+          </p>
+        </div>
+      )}
 
       {document.status === "completed" && (
         <>
@@ -190,6 +206,9 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
 
       {document.status === "failed" && (
         <div className="failure-block">
+          {document.error.cause && (
+            <CauseDetails cause={document.error.cause} attempts={document.attempts} />
+          )}
           <p role="alert">{document.error.message}</p>
           {document.error.code === "empty_extraction" && document.parser === "pypdf" && (
             <p>
@@ -204,17 +223,37 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
   );
 }
 
-function statusMessage(documents: readonly TrackedDocument[], pollError: string | null): string {
-  if (pollError !== null) return pollError;
-  if (documents.length === 0) return "No documents submitted yet.";
-  const active = documents.filter(
-    (document) => document.status === "queued" || document.status === "processing",
+function CauseDetails({ cause, attempts }: { cause: ProviderCause; attempts: number }) {
+  const label = {
+    rate_limited: "Gemini API limit reached",
+    unavailable: "Gemini temporarily unavailable",
+    timeout: "Gemini request timed out",
+    connection_error: "Gemini connection failed",
+    temporary_failure: "Temporary Gemini failure",
+  }[cause.category];
+  return (
+    <div className="cause-details">
+      <strong>{label}</strong>
+      <p>
+        {cause.stage} · attempt {cause.attempt}
+        {cause.http_status != null ? ` · HTTP ${cause.http_status}` : ""}
+      </p>
+      {cause.attempt < attempts && (
+        <p>
+          Last confirmed failure on attempt {cause.attempt}; final admitted attempt: {attempts}.
+        </p>
+      )}
+    </div>
   );
-  if (active.length === 0) {
-    return documents.some((document) => document.status === "unavailable")
-      ? "No documents are still processing. Some results are unavailable."
-      : "All documents have finished processing.";
+}
+
+function statusMessage(documents: readonly TrackedDocument[], pollError: string | null): string {
+  if (documents.length === 0) return pollError ?? "No documents submitted yet.";
+  const counts = { completed: 0, failed: 0, active: 0, unavailable: 0 };
+  for (const document of documents) {
+    if (document.status === "queued" || document.status === "processing") counts.active += 1;
+    else counts[document.status] += 1;
   }
-  if (active.length === 1) return `1 document ${active[0]?.status ?? "processing"}.`;
-  return `${active.length} documents are still processing.`;
+  const summary = `${counts.completed} completed · ${counts.failed} failed · ${counts.active} active · ${counts.unavailable} unavailable`;
+  return pollError === null ? summary : `${summary}. ${pollError}`;
 }

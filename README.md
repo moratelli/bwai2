@@ -105,6 +105,8 @@ An exhausted result keeps `error.code: retry_exhausted` and can include the same
 
 These fields are optional. Legacy results remain valid, resumed attempts omit their old wait, and terminal results have no wait. Submission, readiness, and lookup error envelopes are unchanged.
 
+The Results summary counts completed, failed, active, and unavailable documents currently shown, including earlier submissions on that page. Queued jobs and scheduled retries remain active. Temporary polling errors preserve the cards and counts. Retry cards show a fixed not-before timestamp rather than a countdown or a promise of immediate processing. The scripted `retry-feedback.e2e.ts` browser scenario verifies this presentation with intercepted synthetic responses; it does not test live Gemini availability.
+
 ## Architecture and Redis flow
 
 ```text
