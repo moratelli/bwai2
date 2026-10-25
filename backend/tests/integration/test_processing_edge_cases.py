@@ -1,8 +1,10 @@
 """Processing failures stay isolated across worker, Redis and result boundaries."""
 
+import json
+import logging
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -20,9 +22,11 @@ from document_processor.infrastructure.parsers.pypdf_parser import PyPdfParser
 from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 from document_processor.infrastructure.redis_streams import RedisStreamQueue
+from document_processor.infrastructure.summarizers.gemini_summarizer import GeminiSummarizer
 from document_processor.ports import DocumentSummarizer, ParserRegistry
 from document_processor.services.processing import ProcessingService
 from document_processor.worker import DocumentWorker
+from document_processor.worker_logging import SafeWorkerFormatter
 
 FAILED_ID = UUID("00000000-0000-4000-8000-000000000031")
 VALID_ID = UUID("00000000-0000-4000-8000-000000000032")
@@ -176,3 +180,76 @@ async def test_pdf_limit_failure_does_not_interrupt_sibling(
     }
     assert "pages" not in response.json() and "summary" not in response.json()
     assert sibling.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_truncated_summary_is_persisted_before_ack_without_leaking_content(
+    redis: FakeRedis, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload = "SUMMARY_PAYLOAD_CANARY"
+    metadata = "SUMMARY_METADATA_CANARY"
+    candidate = types.Candidate(
+        content=types.Content(parts=[types.Part.from_text(text=payload)]),
+        finish_reason=types.FinishReason.MAX_TOKENS,
+        finish_message=metadata,
+    )
+    models = StubModels(types.GenerateContentResponse(candidates=[candidate]))
+    client = SimpleNamespace(aio=SimpleNamespace(models=models))
+    summarizer = GeminiSummarizer(client=client, model="test", chunk_size=1000)
+    repository = RedisDocumentRepository(redis)
+    gateway = RedisSubmissionGateway(redis, ttl_seconds=3600)
+    queue = RedisStreamQueue(redis)
+    worker = make_worker(queue, repository, {ParserKind.PYPDF: PyPdfParser()}, summarizer)
+    acknowledge = queue.acknowledge
+    acknowledgements: list[str] = []
+
+    async def observe_acknowledgement(message_id: str) -> int:
+        stored = await repository.get(FAILED_ID)
+        assert stored is not None and stored.status is DocumentStatus.FAILED
+        assert stored.error_code == "invalid_provider_response"
+        assert await repository.get_source(FAILED_ID) is None
+        acknowledgements.append(message_id)
+        return await acknowledge(message_id)
+
+    monkeypatch.setattr(queue, "acknowledge", observe_acknowledgement)
+    output = StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(SafeWorkerFormatter())
+    logger = logging.getLogger()
+    logger.addHandler(handler)
+    caplog.set_level(logging.INFO, logger="document_processor.worker")
+    try:
+        await gateway.create_batch([new_document(FAILED_ID, text_pdf(), ParserKind.PYPDF)])
+        assert await worker.run_once() == 1
+        failed = await repository.get(FAILED_ID)
+        assert failed is not None and failed.status is DocumentStatus.FAILED
+        assert failed.error_code == "invalid_provider_response"
+        message = "Gemini reached its response limit before a complete summary could be confirmed."
+        assert failed.error_message == message
+        assert failed.attempts == 1
+        assert failed.pages is None and failed.summary is None
+        assert models.calls == 1
+        assert len(acknowledgements) == 1
+        assert (await redis.xpending(queue.stream_name, queue.group_name))["pending"] == 0
+
+        app = create_app(
+            settings=Settings(), submission_gateway=gateway, document_reader=repository
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+            response = await http.get(f"/api/v1/documents/{FAILED_ID}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failed"
+        assert body["error"] == {"code": "invalid_provider_response", "message": message}
+        assert "pages" not in body and "summary" not in body
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        failures = [row for row in records if row["event"] == "document_processing_failed"]
+        assert len(failures) == 1
+        assert failures[0]["document_id"] == str(FAILED_ID)
+        assert failures[0]["attempt"] == 1
+        for canary in (payload, metadata, "LEASE_CANARY"):
+            assert canary not in response.text
+            assert canary not in output.getvalue()
+    finally:
+        logger.removeHandler(handler)
+        handler.close()

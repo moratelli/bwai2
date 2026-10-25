@@ -36,7 +36,9 @@ Gemini uses `gemini-3.1-flash-lite` by default. Its model name can be changed in
 
 Gemini extraction sends the whole PDF in one request and expects every page in one response. Passing the upload-size limit does not guarantee that the full extraction fits in a response. The bundled two-page quality check covers that fixture; it does not establish large-document reliability.
 
-Rejected responses keep the `invalid_provider_response` code, with a specific message for a confirmed response limit, empty output, malformed JSON, an invalid page schema, or mismatched page counts or numbering. The app rejects incomplete results rather than silently dropping pages. Missing pages or malformed JSON alone do not prove that a response limit was reached.
+Rejected extraction responses keep the `invalid_provider_response` code, with a specific message for a confirmed response limit, empty output, malformed JSON, an invalid page schema, or mismatched page counts or numbering. The app rejects incomplete results rather than silently dropping pages. Missing pages or malformed JSON alone do not prove that a response limit was reached.
+
+Summarization also rejects a consumed response marked `MAX_TOKENS`, even if it contains text. The document fails with `invalid_provider_response`: "Gemini reached its response limit before a complete summary could be confirmed." This applies to section summaries, reductions and final synthesis. Rejected text never feeds another synthesis step. Absent or unrecognized finish metadata follows normal summary validation; this check does not increase document capacity.
 
 These diagnostics apply to new processing after the worker is updated. Existing failed records keep their stored message.
 

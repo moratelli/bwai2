@@ -15,6 +15,9 @@ class GeminiSummaryResponse(Protocol):
     @property
     def text(self) -> str | None: ...
 
+    @property
+    def candidates(self) -> Sequence[types.Candidate] | None: ...
+
 
 class GeminiSummaryModels(Protocol):
     async def generate_content(
@@ -163,6 +166,12 @@ class GeminiSummarizer:
             )
         except Exception as error:
             raise self._safe_provider_error(error) from error
+        candidates = response.candidates
+        if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+            raise PermanentProcessingError(
+                "invalid_provider_response",
+                "Gemini reached its response limit before a complete summary could be confirmed.",
+            )
         summary = response.text
         if summary is None or not summary.strip():
             raise PermanentProcessingError(

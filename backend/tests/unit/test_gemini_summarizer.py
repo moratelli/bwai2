@@ -9,12 +9,16 @@ from google.genai import types
 
 from document_processor.domain.errors import PermanentProcessingError, RetryableProcessingError
 from document_processor.domain.models import PageContent
-from document_processor.infrastructure.summarizers.gemini_summarizer import GeminiSummarizer
+from document_processor.infrastructure.summarizers.gemini_summarizer import (
+    GeminiSummarizer,
+    GeminiSummaryResponse,
+)
 
 
 @dataclass
 class FakeResponse:
     text: str | None
+    candidates: list[types.Candidate] | None = None
 
 
 @dataclass
@@ -27,7 +31,7 @@ class CapturedRequest:
 class FakeModels:
     def __init__(
         self,
-        responses: list[FakeResponse | Exception],
+        responses: list[GeminiSummaryResponse | Exception],
         *,
         reply: Callable[[str], str] | None = None,
     ) -> None:
@@ -41,7 +45,7 @@ class FakeModels:
         model: str,
         contents: str,
         config: types.GenerateContentConfig,
-    ) -> FakeResponse:
+    ) -> GeminiSummaryResponse:
         self.requests.append(CapturedRequest(model, contents, config))
         response = FakeResponse(self.reply(contents)) if self.reply else self.responses.pop(0)
         if isinstance(response, Exception):
@@ -83,6 +87,119 @@ def summarizer_with(
         chunk_size=chunk_size,
     )
     return summarizer, models
+
+
+def sdk_summary(text: str | None, reason: str | None) -> types.GenerateContentResponse:
+    content = None if text is None else types.Content(parts=[types.Part.from_text(text=text)])
+    candidate = types.Candidate.model_construct(content=content, finish_reason=reason)
+    return types.GenerateContentResponse(candidates=[candidate])
+
+
+LIMIT_MESSAGE = "Gemini reached its response limit before a complete summary could be confirmed."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text", [None, "", " \n", "Partial result", "An apparently complete summary."]
+)
+@pytest.mark.parametrize("reason", [types.FinishReason.MAX_TOKENS, "MAX_TOKENS"])
+async def test_confirmed_limit_takes_precedence_over_summary_text(
+    text: str | None, reason: str
+) -> None:
+    models = FakeModels([sdk_summary(text, reason)])
+    summarizer = GeminiSummarizer(
+        client=FakeClient(FakeAsyncClient(models)), model="test", chunk_size=1000
+    )
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await summarizer.summarize([PageContent(0, "Synthetic source")])
+
+    assert caught.value.code == "invalid_provider_response"
+    assert str(caught.value) == LIMIT_MESSAGE
+    assert len(models.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prior", "stage"),
+    [
+        ([], "Summarize this section"),
+        (["a"], "Summarize this section"),
+        (["a", "b"], "Synthesize"),
+        (["x" * 80, "y" * 80], "Compress"),
+        (["x" * 80, "y" * 80, "a", "b", "c", "d"], "Synthesize"),
+    ],
+    ids=["first-section", "second-section", "final", "reduction", "final-after-reduction"],
+)
+async def test_summary_limit_stops_the_pipeline_at_every_stage(
+    prior: list[str], stage: str
+) -> None:
+    canary = "TRUNCATED_SUMMARY_CANARY"
+    responses: list[GeminiSummaryResponse | Exception] = [FakeResponse(text) for text in prior]
+    responses += [sdk_summary(canary, types.FinishReason.MAX_TOKENS)]
+    responses += [FakeResponse("q")] * 30
+    models = FakeModels(responses)
+    summarizer = GeminiSummarizer(
+        client=FakeClient(FakeAsyncClient(models)), model="test", chunk_size=100
+    )
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await summarizer.summarize([PageContent(0, "A" * 80), PageContent(1, "B" * 80)])
+
+    assert caught.value.code == "invalid_provider_response"
+    assert str(caught.value) == LIMIT_MESSAGE
+    assert len(models.requests) == len(prior) + 1
+    assert models.requests[-1].contents.startswith(stage)
+    assert all(canary not in request.contents for request in models.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        None,
+        [],
+        [types.Candidate()],
+        [types.Candidate(finish_reason=types.FinishReason.STOP)],
+        [types.Candidate.model_construct(finish_reason="UNKNOWN_METADATA_CANARY")],
+    ],
+)
+@pytest.mark.parametrize("text", [None, "", "  ", "  Valid summary  "])
+async def test_missing_or_unrecognized_finish_metadata_keeps_text_validation(
+    candidates: list[types.Candidate] | None, text: str | None
+) -> None:
+    models = FakeModels([FakeResponse(text, candidates)])
+    summarizer = GeminiSummarizer(
+        client=FakeClient(FakeAsyncClient(models)), model="test", chunk_size=1000
+    )
+    if text is not None and text.strip():
+        assert await summarizer.summarize([PageContent(0, "Source")]) == text.strip()
+    else:
+        with pytest.raises(PermanentProcessingError) as caught:
+            await summarizer.summarize([PageContent(0, "Source")])
+        assert caught.value.code == "invalid_provider_response"
+        assert str(caught.value) == "Gemini returned an invalid summary."
+    assert len(models.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_unused_candidate_limit_does_not_override_consumed_summary() -> None:
+    response = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(parts=[types.Part.from_text(text="Valid summary")]),
+                finish_reason=types.FinishReason.STOP,
+            ),
+            types.Candidate(finish_reason=types.FinishReason.MAX_TOKENS),
+        ]
+    )
+    models = FakeModels([response])
+    summarizer = GeminiSummarizer(
+        client=FakeClient(FakeAsyncClient(models)), model="test", chunk_size=1000
+    )
+
+    assert await summarizer.summarize([PageContent(0, "Source")]) == "Valid summary"
+    assert len(models.requests) == 1
 
 
 @pytest.mark.asyncio
