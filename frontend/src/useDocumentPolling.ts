@@ -1,6 +1,7 @@
 import { useAtomValue, useSetAtom, useStore } from "jotai";
 import { useCallback, useEffect, useRef } from "react";
 
+import { ApiError } from "./api";
 import type { AcceptedDocument, DocumentReader, TrackedDocument } from "./api";
 import { documentsAtom, pollingErrorAtom, trackedDocumentIdsAtom } from "./pollingAtoms";
 
@@ -16,7 +17,7 @@ interface PollingState {
   clear: () => void;
 }
 
-const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "unavailable"]);
 
 export function useDocumentPolling(
   reader: DocumentReader,
@@ -74,12 +75,21 @@ export function useDocumentPolling(
       if (!active) return;
 
       const updates = new Map<string, TrackedDocument>();
+      const missing = new Set<string>();
       let hadFailure = false;
-      for (const result of results) {
+      for (const [index, result] of results.entries()) {
         if (result.status === "fulfilled") updates.set(result.value.id, result.value);
-        else hadFailure = true;
+        else if (result.reason instanceof ApiError && result.reason.status === 404) {
+          const id = activeIds[index];
+          if (id !== undefined) missing.add(id);
+        } else hadFailure = true;
       }
-      const next = store.get(documentsAtom).map((document) => updates.get(document.id) ?? document);
+      const next = store.get(documentsAtom).map<TrackedDocument>((document) => {
+        if (missing.has(document.id) && !TERMINAL_STATUSES.has(document.status)) {
+          return { ...document, status: "unavailable" };
+        }
+        return updates.get(document.id) ?? document;
+      });
       setDocuments(next);
 
       if (hadFailure) {

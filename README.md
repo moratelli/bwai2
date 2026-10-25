@@ -64,6 +64,8 @@ curl --fail-with-body \
 
 Repeat the `files` form field to submit several PDFs in one batch. The API validates the whole batch before it writes any job.
 
+A result lookup returning HTTP `404` means the document was not found or has expired. The browser stops polling that document and offers resubmission guidance, while other jobs continue. Temporary network and server failures still retry. The unavailable label is local to the browser; it is not a new API status.
+
 ## Test the API with Bruno
 
 Open the checked-in `bruno/` folder as a collection. It includes local environments, synthetic PDF fixtures, response assertions, and automatic document-ID capture for PyPDF, batch, worker-failure, validation, and live Gemini requests.

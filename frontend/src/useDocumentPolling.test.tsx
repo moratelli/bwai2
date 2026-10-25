@@ -4,6 +4,7 @@ import type { PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AcceptedDocument, DocumentResource, DocumentReader } from "./api";
+import { ApiError } from "./api";
 import { useDocumentPolling } from "./useDocumentPolling";
 
 const first: AcceptedDocument = {
@@ -93,6 +94,86 @@ describe("useDocumentPolling", () => {
       "failed",
     ]);
     expect(reader.getDocument).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops polling a missing document without a temporary-error banner", async () => {
+    const getDocument = vi
+      .fn<DocumentReader["getDocument"]>()
+      .mockRejectedValue(new ApiError(404, "document_not_found", "Not found."));
+    const { result } = renderHook(() => useDocumentPolling({ getDocument }), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.track([first]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents[0]?.status).toBe("unavailable");
+    expect(result.current.pollError).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(getDocument).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+
+    getDocument.mockResolvedValueOnce(resource(second, "completed"));
+    act(() => result.current.track([second]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents.map(({ status }) => status)).toEqual([
+      "unavailable",
+      "completed",
+    ]);
+    expect(getDocument).toHaveBeenCalledTimes(2);
+    expect(getDocument).toHaveBeenLastCalledWith(second.id, expect.any(AbortSignal));
+  });
+
+  it("keeps missing, completed, and temporarily failing siblings independent", async () => {
+    const third = { ...first, id: "00000000-0000-4000-8000-000000000003" };
+    let thirdCalls = 0;
+    const getDocument = vi.fn(async (id: string) => {
+      if (id === first.id) throw new ApiError(404, "document_not_found", "Not found.");
+      if (id === second.id) return resource(second, "completed");
+      if (++thirdCalls === 1) throw new ApiError(503, "unavailable", "Unavailable.");
+      return resource(third, "completed");
+    });
+    const { result } = renderHook(() => useDocumentPolling({ getDocument }), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.track([first, second, third]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.documents.map(({ status }) => status)).toEqual([
+      "unavailable",
+      "completed",
+      "queued",
+    ]);
+    expect(result.current.pollError).toContain("Retrying");
+    await act(() => vi.advanceTimersByTimeAsync(1_999));
+    expect(getDocument).toHaveBeenCalledTimes(3);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.documents.map(({ status }) => status)).toEqual([
+      "unavailable",
+      "completed",
+      "completed",
+    ]);
+    expect(result.current.pollError).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(getDocument).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores a late 404 after clearing the tracked documents", async () => {
+    let rejectPending: ((reason: unknown) => void) | undefined;
+    const getDocument = vi.fn(
+      () =>
+        new Promise<DocumentResource>((_resolve, reject) => {
+          rejectPending = reject;
+        }),
+    );
+    const { result } = renderHook(() => useDocumentPolling({ getDocument }), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.track([first]));
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    act(() => result.current.clear());
+    await act(async () => rejectPending?.(new ApiError(404, "document_not_found", "Not found.")));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(result.current.documents).toEqual([]);
+    expect(result.current.pollError).toBeNull();
+    expect(getDocument).toHaveBeenCalledTimes(1);
   });
 
   it("backs off after temporary failures and preserves the last state", async () => {

@@ -129,6 +129,28 @@ describe("DocumentApi", () => {
     });
   });
 
+  it("preserves a 404 status even when its error body is not JSON", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("Not found", { status: 404 }));
+    await expect(new DocumentApi(fetcher).getDocument("missing")).rejects.toMatchObject({
+      status: 404,
+      code: "request_failed",
+    });
+  });
+
+  it("does not accept the client-local unavailable state from the API", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...acceptedBody.documents[0],
+        status: "unavailable",
+        updated_at: "2026-10-23T12:01:00Z",
+        attempts: 0,
+      }),
+    );
+    await expect(new DocumentApi(fetcher).getDocument("missing")).rejects.toThrow(
+      "invalid response",
+    );
+  });
+
   it("rejects malformed success payloads", async () => {
     const fetcher = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()

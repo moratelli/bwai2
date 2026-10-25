@@ -182,6 +182,12 @@ function DocumentCard({ document }: { document: TrackedDocument }) {
         </>
       )}
 
+      {document.status === "unavailable" && (
+        <div className="failure-block">
+          <p role="alert">Document not found or expired. Upload it again to process it.</p>
+        </div>
+      )}
+
       {document.status === "failed" && (
         <div className="failure-block">
           <p role="alert">{document.error.message}</p>
@@ -204,7 +210,11 @@ function statusMessage(documents: readonly TrackedDocument[], pollError: string 
   const active = documents.filter(
     (document) => document.status === "queued" || document.status === "processing",
   );
-  if (active.length === 0) return "All documents have finished processing.";
+  if (active.length === 0) {
+    return documents.some((document) => document.status === "unavailable")
+      ? "No documents are still processing. Some results are unavailable."
+      : "All documents have finished processing.";
+  }
   if (active.length === 1) return `1 document ${active[0]?.status ?? "processing"}.`;
   return `${active.length} documents are still processing.`;
 }

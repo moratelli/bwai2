@@ -10,7 +10,10 @@ export type PageContent = components["schemas"]["PageResponse"];
 export type CompletedDocument = components["schemas"]["CompletedDocumentResponse"];
 export type FailedDocument = components["schemas"]["FailedDocumentResponse"];
 export type DocumentResource = components["schemas"]["DocumentResponse"];
-export type TrackedDocument = AcceptedDocument | DocumentResource;
+export type UnavailableDocument = Omit<AcceptedDocument, "status"> & {
+  status: "unavailable";
+};
+export type TrackedDocument = AcceptedDocument | DocumentResource | UnavailableDocument;
 
 export interface DocumentReader {
   getDocument(id: string, signal?: AbortSignal): Promise<DocumentResource>;
@@ -73,8 +76,11 @@ export class DocumentApi implements DocumentReader {
       method: "GET",
       signal,
     });
+    if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => null);
+      throw parseApiError(response.status, payload);
+    }
     const payload: unknown = await response.json();
-    if (!response.ok) throw parseApiError(response.status, payload);
     return parseDocument(payload);
   }
 }

@@ -4,7 +4,13 @@ import { Provider, createStore } from "jotai";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import type { AcceptedDocument, CompletedDocument, DocumentClient, DocumentResource } from "./api";
+import type {
+  AcceptedDocument,
+  CompletedDocument,
+  DocumentClient,
+  DocumentResource,
+  TrackedDocument,
+} from "./api";
 import { ApiError } from "./api";
 import { documentsAtom } from "./pollingAtoms";
 
@@ -26,7 +32,7 @@ function fakeClient(): DocumentClient & {
   };
 }
 
-function renderApp(client = fakeClient(), documents: DocumentResource[] = []) {
+function renderApp(client = fakeClient(), documents: TrackedDocument[] = []) {
   const store = createStore();
   store.set(documentsAtom, documents);
   return {
@@ -139,6 +145,15 @@ describe("App", () => {
     expect(screen.getByText("Page 1")).toBeVisible();
     expect(screen.getByRole("heading", { name: "broken.pdf" })).toBeVisible();
     expect(screen.getByText("The PDF is corrupt or unsupported.")).toBeVisible();
+  });
+
+  it("shows unavailable guidance without claiming all documents finished", () => {
+    renderApp(fakeClient(), [{ ...accepted, status: "unavailable" }]);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Document not found or expired.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Upload it again");
+    expect(screen.getByRole("status")).toHaveTextContent("results are unavailable");
+    expect(screen.getByRole("status")).not.toHaveTextContent("All documents have finished");
   });
 
   it("does not execute raw HTML returned in Markdown", () => {
