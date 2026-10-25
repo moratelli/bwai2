@@ -50,6 +50,18 @@ Task 5.1 evidence: the acceptance test passes with fake and disposable real Redi
 
 Verification correction (task 4.1): report-only OpenSpec verification found that the browser silently omitted malformed metadata rather than rejecting the response as approved. Twenty-one updated regression cases failed before adding the two validation guards. Absent/null optional fields remain compatible; invalid present metadata now raises the existing content-free invalid-response error. Fresh full verification passed 643 backend tests, 60 frontend tests, static gates, builds, HTTP/concurrency smoke, and both Chromium scenarios. Disposable Compose cleanup passed again. No scope or canonical-spec change was needed.
 
+## Final review
+
+Astra max and Opus high reviewed `1b78b53b4f9e18b05814c35aea7b9390703fb893..3a1225f5d2158d51e58f685c60ded347a0dd7172`. Opus returned no findings; its prose response was corrected to `[]` without another review. Astra reported the three advisories below. The main session checked the affected code, reproduced the timestamp failures, and reproduced the transport-conversion behavior using the installed Redis client with an in-memory fake. Verdict: `PASS_WITH_ADVISORIES`. There are no critical/high findings and no post-review runtime fix wave.
+
+Deferred under the approved review policy:
+
+- **Medium, Redis uncertainty:** redis-py 6.4 can translate a connection failure while watching into `WatchError`. The gate and owned retry-state updates treat that as a normal conflict. A probe injecting reply loss below `Pipeline.execute` observed two transaction attempts and successful continuation after a fresh admission five seconds later, rather than an infrastructure-uncertainty error. This did not demonstrate an unpaced call or ownership violation, but the uncertainty contract and existing high-level fault-injection coverage are incomplete. Follow-up: distinguish transport-origin conflicts and test below `execute`.
+- **Medium, malformed stored deadlines:** `decode_deadline` raises `OverflowError` when converting `0001-01-01T00:00:00+01:00` or `9999-12-31T23:59:59-01:00` to UTC. Such corrupted optional metadata can break lookup/admission instead of being ignored. Normal application-generated deadlines do not use these values. Follow-up: guard timezone conversion and cover lookup/admission.
+- **Low, quota recovery guidance:** terminal confirmed-429 cards show the cause but omit the planned manual recovery instruction. Follow-up: explain checking quota, waiting, and manually uploading again, without promising an automatic retry.
+
+These findings qualify the earlier report-only statement that all scenarios were fully covered. The requirement implementations and passing tests remain, but the uncertainty/invalid-metadata edge cases and manual-guidance scenario have the limitations recorded above. Canonical requirements are not weakened to hide them. No live provider calls, private documents, credentials, or existing-stack changes were used during review.
+
 ## Workflow follow-up
 
 - Run installed OpenSpec report-only verification once after all tracked tasks, then strict active-change validation and the single risk-tiered final implementation review. The optional public contract and third-party failure handling warrant the high-risk review path. Use at most the permitted main-session fix wave for demonstrated critical/high findings.
