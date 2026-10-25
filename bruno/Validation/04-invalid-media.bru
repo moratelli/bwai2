@@ -1,0 +1,26 @@
+meta {
+  name: Reject text upload
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/documents
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  parser: pypdf
+  files: @file(./fixtures/notes.txt) @contentType(text/plain)
+}
+
+tests {
+  test("Returns 422 invalid_media_type", () => {
+    expect(res.getStatus()).to.equal(422);
+    const error = res.getBody().error;
+    expect(error.code).to.equal("invalid_media_type");
+    expect(typeof error.message).to.equal("string");
+    expect(error.message.length > 0).to.equal(true);
+  });
+}

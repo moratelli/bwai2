@@ -1,0 +1,37 @@
+meta {
+  name: Get first batch result
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/v1/documents/{{batchFirstId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("Returns the submitted document", () => {
+    expect(res.getStatus()).to.equal(200);
+    const body = res.getBody();
+    expect(body.id).to.equal(bru.getVar("batchFirstId") || bru.getEnvVar("batchFirstId"));
+    expect(body.parser).to.equal("pypdf");
+  });
+
+  test("Is pending or reaches the expected completed result", () => {
+    const body = res.getBody();
+    expect(["queued", "processing", "completed"].includes(body.status)).to.equal(true);
+    if (body.status === "completed") {
+      expect(body.summary.trim().length > 0).to.equal(true);
+      expect(body.pages.length > 0).to.equal(true);
+      body.pages.forEach((page, index) => expect(page.index).to.equal(index));
+      expect(body.pages.some((page) => page.markdown.trim().length > 0)).to.equal(true);
+    }
+  });
+}
+
+docs {
+  Send the matching POST first, then repeat this GET until status is completed.
+  A passing test while queued or processing only validates the in-flight response.
+  HTTP 200 means the record was retrieved, not that processing succeeded.
+}

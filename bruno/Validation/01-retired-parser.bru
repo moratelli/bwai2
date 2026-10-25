@@ -1,0 +1,26 @@
+meta {
+  name: Reject Mistral
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/documents
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  parser: mistral
+  files: @file(./fixtures/sample.pdf) @contentType(application/pdf)
+}
+
+tests {
+  test("Returns 422 invalid_request", () => {
+    expect(res.getStatus()).to.equal(422);
+    const error = res.getBody().error;
+    expect(error.code).to.equal("invalid_request");
+    expect(typeof error.message).to.equal("string");
+    expect(error.message.length > 0).to.equal(true);
+  });
+}

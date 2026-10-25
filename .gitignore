@@ -1,0 +1,33 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Python
+.python-version.local
+**/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# JavaScript
+**/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+
+# Editor, agent, and operating system
+.DS_Store
+.idea/
+.pi/
+.vscode/
+
+# Runtime and generated artifacts
+*.log
+*.zip
+.tmp/

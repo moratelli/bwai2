@@ -1,0 +1,1 @@
+Synthetic non-PDF fixture for media-type validation.

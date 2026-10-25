@@ -1,0 +1,48 @@
+meta {
+  name: Submit two PDFs
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/documents
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  parser: pypdf
+  files: @file(./fixtures/sample.pdf|./fixtures/second.pdf) @contentType(application/pdf)
+}
+
+script:pre-request {
+  bru.deleteVar("batchFirstId");
+  bru.deleteVar("batchSecondId");
+}
+
+script:post-response {
+  if (res.getStatus() === 202) {
+    const documents = res.getBody().documents;
+    bru.setVar("batchFirstId", documents[0].id);
+    bru.setVar("batchSecondId", documents[1].id);
+  }
+}
+
+tests {
+  test("Accepts 2 document(s) without waiting for processing", () => {
+    expect(res.getStatus()).to.equal(202);
+    const documents = res.getBody().documents;
+    expect(documents.length).to.equal(2);
+    expect(new Set(documents.map((document) => document.id)).size).to.equal(2);
+    documents.forEach((document) => {
+      expect(document.parser).to.equal("pypdf");
+      expect(document.status).to.equal("queued");
+      expect(typeof document.id).to.equal("string");
+    });
+  });
+}
+
+docs {
+  Follow with the matching GET request until status is completed.
+  202 means accepted, not finished. IDs are runtime variables, not saved environment values.
+}

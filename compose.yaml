@@ -1,0 +1,75 @@
+name: bwai2
+
+x-backend-environment: &backend-environment
+  REDIS_URL: redis://redis:6379/0
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+  DOCUMENT_TTL_SECONDS: ${DOCUMENT_TTL_SECONDS:-86400}
+  MAX_FILES_PER_BATCH: ${MAX_FILES_PER_BATCH:-10}
+  MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
+  SUMMARY_CHUNK_CHARACTERS: ${SUMMARY_CHUNK_CHARACTERS:-100000}
+  TEST_SUMMARIZER_ENABLED: ${TEST_SUMMARIZER_ENABLED:-false}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+  WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  api:
+    build:
+      context: ./backend
+    environment: *backend-environment
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "document_processor.worker_main"]
+    environment: *backend-environment
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os
+          from redis import Redis
+          assert Redis.from_url(os.environ["REDIS_URL"]).ping()
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  redis-data:

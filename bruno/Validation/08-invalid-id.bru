@@ -1,0 +1,21 @@
+meta {
+  name: Invalid document UUID
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/api/v1/documents/not-a-uuid
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("Returns 422 invalid_request", () => {
+    expect(res.getStatus()).to.equal(422);
+    const error = res.getBody().error;
+    expect(error.code).to.equal("invalid_request");
+    expect(typeof error.message).to.equal("string");
+    expect(error.message.length > 0).to.equal(true);
+  });
+}
