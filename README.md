@@ -6,7 +6,7 @@ The implementation favors a clear local review path over production infrastructu
 
 ## Run it
 
-You need Docker with Compose v2. Copy `.env.example` to an untracked `.env`, then set `GEMINI_API_KEY`.
+You need Docker with Compose v2 and `make`. Run the commands below from the repository root. On a fresh checkout, copy `.env.example` to an untracked `.env`, then set `GEMINI_API_KEY`. Keep an existing `.env` rather than overwriting it.
 
 ```bash
 make up
@@ -48,26 +48,20 @@ Mistral OCR was removed because the available free Mistral Studio account had ze
 
 ## Try the API with curl
 
-Generate a one-page PDF that PyPDF can extract:
-
-```bash
-python3 scripts/generate_sample_pdf.py .tmp/sample.pdf
-```
-
-With the stack running and Gemini configured, submit it through the same Nginx endpoint used by the browser:
+The repository includes a synthetic one-page PDF, so this example needs no local Python setup. With the stack running and Gemini configured, submit it through the same Nginx endpoint used by the browser:
 
 ```bash
 curl --fail-with-body \
   -X POST http://localhost:8080/api/v1/documents \
   -F 'parser=pypdf' \
-  -F 'files=@.tmp/sample.pdf;type=application/pdf'
+  -F 'files=@bruno/fixtures/sample.pdf;type=application/pdf'
 ```
 
-The response contains a document ID and HTTP status `202`. Poll that document until `status` becomes `completed` or `failed`:
+The response contains a document ID and HTTP status `202`. Replace `<document-id>` below with that ID and poll until `status` becomes `completed` or `failed`:
 
 ```bash
 curl --fail-with-body \
-  http://localhost:8080/api/v1/documents/<document-id>
+  "http://localhost:8080/api/v1/documents/<document-id>"
 ```
 
 Repeat the `files` form field to submit several PDFs in one batch. The API validates the whole batch before it writes any job.
@@ -87,7 +81,9 @@ Follow the [Bruno runbook](bruno/README.md). Select **Local** for port `8080` or
 | `POST` | `/api/v1/documents` | Validate PDFs and enqueue one job per file |
 | `GET` | `/api/v1/documents/{document_id}` | Read queued, processing, completed, or failed state |
 | `GET` | `/health/live` | Confirm that the API process is alive |
-| `GET` | `/health/ready` | Check Redis and summary-provider readiness |
+| `GET` | `/health/ready` | Check Redis and summary-provider configuration |
+
+Readiness does not contact Gemini. A `configured` result means a key was supplied, not that Google accepted it or that quota is available. Use a live processing check to verify extraction and summarization.
 
 FastAPI owns the OpenAPI contract. The generated schema lives at `frontend/openapi.json`; `openapi-typescript` turns it into `frontend/src/generated/api.ts`. Runtime parsing in the frontend still validates untrusted JSON before it enters Jotai state.
 
@@ -172,16 +168,40 @@ Summary requests enforce the configured character budget on page and section con
 
 ## Development checks
 
-Python dependencies and commands run through `uv`; frontend dependencies use the committed npm lockfile.
+Host checks need Python 3.12, `uv`, Node.js 24 with npm, and `make`. CI uses `uv` 0.11.7. Python dependencies and commands run through `uv`; frontend dependencies use the committed npm lockfile. Container checks also need Docker with Compose v2.
 
 ```bash
 make setup
 make check
 ```
 
+Choose the check for the evidence you need:
+
+| Command | Coverage | Live Gemini calls |
+| --- | --- | --- |
+| `make check` | Static checks, API/unit/integration tests and builds; real Redis cases require `TEST_REDIS_URL` | No |
+| `make smoke` | Real Compose HTTP/worker flow and ten concurrent uploads, with a deterministic test summary | No |
+| `make browser-e2e` | One Chromium upload-to-result flow, with a deterministic test summary | No |
+| `make live-providers` | One-page Gemini extraction and a non-empty real summary | Yes |
+| `make live-quality` | Two-page Gemini extraction and summary, checked against selected labelled facts | Yes |
+
+`make check` does not run the Compose, browser or live-provider checks. The test summarizer verifies orchestration; it cannot establish whether Gemini produces a correct summary.
+
 `make check` verifies generated API drift, Ruff formatting and linting, strict mypy, Oxfmt, Oxlint, strict application and Playwright TypeScript, backend and frontend tests, the Python package build, and the Vite production build.
 
-CI provides a disposable Redis 7 service for the integration tests. Locally, set `TEST_REDIS_URL` to a disposable Redis 7 instance before running the checks to include real transaction, expiry, and ownership tests. The submission test clears the selected database: never use an application database. Without that variable, real-Redis cases explicitly skip; a configured but unreachable instance fails the run.
+CI provides a disposable Redis 7 service for the integration tests. Locally, set `TEST_REDIS_URL` to a disposable Redis 7 instance before running the checks to include real transaction, expiry, and ownership tests. The submission test clears the selected database: never use an application database. Without that variable, real-Redis cases explicitly skip; a configured but unreachable instance fails the run. Run these tests serially against their own database; their fixtures are not designed for parallel runs sharing it.
+
+For an optional backend coverage report, keep that disposable `TEST_REDIS_URL` configured and run:
+
+```bash
+mkdir -p .tmp
+COVERAGE_FILE="$PWD/.tmp/backend.coverage" \
+  uv run --project backend pytest backend/tests \
+  --cov=document_processor --cov-branch \
+  --cov-config=backend/pyproject.toml --cov-report=term-missing
+```
+
+This measures the `document_processor` package, not frontend code or standalone scripts. There is no enforced percentage threshold. Inspect missing branches and behavior assertions rather than treating the percentage as a quality verdict.
 
 If the FastAPI schema changes, regenerate and verify the frontend contract:
 
@@ -190,12 +210,12 @@ make generate-api
 make check-api
 ```
 
-In a dedicated test shell, select a disposable Compose project and port before running the container checks below:
+In a dedicated test shell, select a new disposable Compose project and an unused port before running the container checks below. The example uses `18081` to stay separate from the Bruno manual stack on `18080`:
 
 ```bash
-export COMPOSE_PROJECT_NAME=bwai2-check
-export APP_PORT=18080
-export APP_URL=http://127.0.0.1:18080
+export COMPOSE_PROJECT_NAME="bwai2-check-$(date +%s)"
+export APP_PORT=18081
+export APP_URL=http://127.0.0.1:18081
 export PLAYWRIGHT_BASE_URL="$APP_URL"
 ```
 
@@ -217,10 +237,10 @@ The concurrency check requires test-only summarization before submitting any PDF
 
 `make smoke` removes the selected stack and Redis volume afterward; it does not edit your `.env`.
 
-Run the same workflow through Chromium with:
+After `make setup`, run the same workflow through Chromium with an explicitly empty provider key:
 
 ```bash
-make browser-e2e
+GEMINI_API_KEY='' make browser-e2e
 ```
 
 This target installs the pinned Playwright Chromium build, opens the real React UI, selects the generated PDF, submits it with PyPDF, waits for the Redis worker result, and checks the rendered summary and page content. CI runs both the HTTP smoke test and this browser test against the same Compose stack, then uploads the Playwright HTML report.

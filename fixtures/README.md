@@ -23,7 +23,9 @@ This command contacts Gemini and uses provider quota. It creates a unique `bwai2
 
 The run has a five-minute budget, with thirty seconds reserved for cleanup, and bounded individual HTTP calls. It submits once, checks the resulting job identity, attempt count and facts, and removes only its own containers and volume. The JSON report includes an explicit cleanup check; a failed cleanup or fact assertion makes the command fail. SDK-level retries remain unchanged.
 
-The runner does not retry a failed job automatically. During the approved delivery check, only one additional run is allowed after a classified transient provider failure, never to bypass a factual assertion. One successful run establishes this fixture/model result only, not general document quality or exactly-once provider execution. CI runs the fake-HTTP runner tests without credentials or Docker.
+The runner does not retry a failed job automatically. Each manual rerun makes new provider calls. Investigate a failed factual check rather than rerunning until it passes. One successful run establishes this fixture/model result only, not general document quality or exactly-once provider execution.
+
+`make live-quality` selects Gemini extraction. To check PyPDF extraction with a real Gemini summary, submit this fixture with `parser=pypdf` to a normally configured stack, then run the exported-result checker below. There is no dedicated PyPDF live-quality Make target. CI runs the fake-HTTP runner tests without credentials or Docker.
 
 ## Check an exported result
 
