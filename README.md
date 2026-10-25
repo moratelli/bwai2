@@ -34,6 +34,12 @@ The app never switches parsers automatically. If Fast text finds no text, choose
 
 Gemini uses `gemini-3.1-flash-lite` by default. Its model name can be changed in `.env`.
 
+Gemini extraction sends the whole PDF in one request and expects every page in one response. Passing the upload-size limit does not guarantee that the full extraction fits in a response. The bundled two-page quality check covers that fixture; it does not establish large-document reliability.
+
+Rejected responses keep the `invalid_provider_response` code, with a specific message for a confirmed response limit, empty output, malformed JSON, an invalid page schema, or mismatched page counts or numbering. The app rejects incomplete results rather than silently dropping pages. Missing pages or malformed JSON alone do not prove that a response limit was reached.
+
+These diagnostics apply to new processing after the worker is updated. Existing failed records keep their stored message.
+
 ### Why Mistral OCR was removed
 
 Mistral OCR was removed because the available free Mistral Studio account had zero execution quota. The API key authenticated, but OCR requests returned HTTP 429 with an allowed rate of zero requests per minute. We therefore could not run and verify the integration and retained PyPDF and Gemini.

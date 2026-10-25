@@ -55,6 +55,9 @@ class GeminiResponse(Protocol):
     @property
     def text(self) -> str | None: ...
 
+    @property
+    def candidates(self) -> Sequence[types.Candidate] | None: ...
+
 
 class GeminiModels(Protocol):
     async def generate_content(
@@ -112,6 +115,13 @@ class GeminiPdfParser:
             )
         except Exception as error:
             raise self._safe_provider_error(error) from error
+        candidates = response.candidates
+        if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+            raise PermanentProcessingError(
+                "invalid_provider_response",
+                "Gemini reached its response limit before a complete extraction could be "
+                "confirmed. Try a smaller PDF.",
+            )
         return self._validated_pages(response.text, expected_page_count)
 
     @classmethod
@@ -120,18 +130,37 @@ class GeminiPdfParser:
         response_text: str | None,
         expected_page_count: int,
     ) -> tuple[PageContent, ...]:
-        try:
-            if response_text is None:
-                raise ValueError("missing response text")
-            payload = GeminiDocumentPayload.model_validate_json(response_text)
-            indexes = [page.index for page in payload.pages]
-            if indexes != list(range(expected_page_count)):
-                raise ValueError("page indexes must match every source page")
-        except (ValidationError, ValueError) as error:
+        if response_text is None or not response_text.strip():
             raise PermanentProcessingError(
                 "invalid_provider_response",
-                "Gemini returned an invalid page structure.",
-            ) from error
+                "Gemini returned no extraction output.",
+            )
+        try:
+            payload = GeminiDocumentPayload.model_validate_json(response_text)
+        except ValidationError as error:
+            invalid_json = any(
+                detail["type"] == "json_invalid"
+                for detail in error.errors(
+                    include_input=False, include_context=False, include_url=False
+                )
+            )
+            message = (
+                "Gemini returned malformed JSON for the extracted pages."
+                if invalid_json
+                else "Gemini returned an invalid page structure."
+            )
+            raise PermanentProcessingError("invalid_provider_response", message) from error
+        if len(payload.pages) != expected_page_count:
+            raise PermanentProcessingError(
+                "invalid_provider_response",
+                f"Gemini page count mismatch: expected {expected_page_count}, "
+                f"received {len(payload.pages)}. The result was rejected.",
+            )
+        if [page.index for page in payload.pages] != list(range(expected_page_count)):
+            raise PermanentProcessingError(
+                "invalid_provider_response",
+                "Gemini returned invalid page numbering or order. The result was rejected.",
+            )
         return cls._to_page_content(payload.pages)
 
     @staticmethod

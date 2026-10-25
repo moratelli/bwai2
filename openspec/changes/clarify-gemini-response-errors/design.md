@@ -24,7 +24,7 @@ Use the following order and messages. All cases remain `PermanentProcessingError
 | Text is absent, empty or whitespace | Gemini returned no extraction output. |
 | JSON syntax is invalid | Gemini returned malformed JSON for the extracted pages. |
 | JSON does not satisfy the existing page schema | Gemini returned an invalid page structure. |
-| Schema-valid page count differs | Gemini returned {returned} pages, but the PDF has {expected}. The result was rejected. |
+| Schema-valid page count differs | Gemini page count mismatch: expected {expected}, received {returned}. The result was rejected. |
 | Count matches but indexes are not exactly zero-based source order | Gemini returned invalid page numbering or order. The result was rejected. |
 
 Retain the schema minimum of one page: an empty page array is a schema error, not absent response text. Distinguish JSON syntax from other Pydantic errors using error types, never by echoing exception text or inputs. The only interpolated values are integer counts. A response reporting an output limit is rejected even if its JSON appears complete, since structural validity cannot confirm complete transcription.
@@ -54,4 +54,4 @@ No schema or data migration. New messages apply to new processing after deployin
 
 ## Approval
 
-Pedro approved the narrow direction in chat. Approval of the completed change remains pending until the plan review and the single confirmation checkpoint. That approval will cover implementation, verification, requested Sol/Opus final reviews, archive and PR #1 update, but not merge, a main update, live provider calls or a rebuild of the existing stack.
+Pedro approved the completed change on 2026-10-25 through the `approve_diagnostics_change` confirmation after the Opus plan review of `21f62a64172112216e526b8e8fd93f2c647ca0d9` returned `[]`. This approval covers implementation, verification, requested Sol/Opus final reviews, archive and PR #1 update, but not merge, a main update, live provider calls or a rebuild of the existing stack.

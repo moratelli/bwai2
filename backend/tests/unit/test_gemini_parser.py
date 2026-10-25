@@ -1,5 +1,6 @@
 """Behavior tests for Gemini PDF-to-Markdown extraction."""
 
+import json
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -12,6 +13,7 @@ from document_processor.domain.errors import PermanentProcessingError, Retryable
 from document_processor.infrastructure.parsers.gemini_parser import (
     GEMINI_DOCUMENT_SCHEMA,
     GeminiPdfParser,
+    GeminiResponse,
 )
 
 
@@ -30,6 +32,7 @@ PDF_BYTES = pdf_bytes()
 @dataclass
 class FakeResponse:
     text: str | None
+    candidates: list[types.Candidate] | None = None
 
 
 @dataclass
@@ -40,7 +43,7 @@ class CapturedRequest:
 
 
 class FakeModels:
-    def __init__(self, response: FakeResponse | Exception) -> None:
+    def __init__(self, response: GeminiResponse | Exception) -> None:
         self.response = response
         self.requests: list[CapturedRequest] = []
 
@@ -50,7 +53,7 @@ class FakeModels:
         model: str,
         contents: list[types.Part],
         config: types.GenerateContentConfig,
-    ) -> FakeResponse:
+    ) -> GeminiResponse:
         self.requests.append(CapturedRequest(model, contents, config))
         if isinstance(self.response, Exception):
             raise self.response
@@ -113,25 +116,157 @@ async def test_extracts_schema_valid_markdown_pages_from_inline_pdf() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "response",
+    ("response", "message"),
     [
-        None,
-        "not json",
-        '{"pages":[]}',
-        '{"pages":[{"index":0,"markdown":"A"}]}',
-        '{"pages":[{"index":0,"markdown":"A"},{"index":0,"markdown":"B"}]}',
-        '{"pages":[{"index":1,"markdown":"B"},{"index":0,"markdown":"A"}]}',
-        '{"pages":[{"index":0,"markdown":"A"},{"index":2,"markdown":"C"}]}',
+        (None, "Gemini returned no extraction output."),
+        ("", "Gemini returned no extraction output."),
+        (" \n\t", "Gemini returned no extraction output."),
+        ("not json", "Gemini returned malformed JSON for the extracted pages."),
+        ('{"pages":[', "Gemini returned malformed JSON for the extracted pages."),
+        ('{"pages":[]}', "Gemini returned an invalid page structure."),
+        ('{"wrong_field":true}', "Gemini returned an invalid page structure."),
+        ('{"pages":[{"index":0}]}', "Gemini returned an invalid page structure."),
+        (
+            '{"pages":[{"index":-1,"markdown":"A"}]}',
+            "Gemini returned an invalid page structure.",
+        ),
+        (
+            '{"pages":[{"index":0,"markdown":"A"}]}',
+            "Gemini page count mismatch: expected 2, received 1. The result was rejected.",
+        ),
+        (
+            '{"pages":[{"index":0,"markdown":"A"},{"index":1,"markdown":"B"},'
+            '{"index":2,"markdown":"C"}]}',
+            "Gemini page count mismatch: expected 2, received 3. The result was rejected.",
+        ),
+        *[
+            (
+                json.dumps({"pages": [{"index": index, "markdown": "A"} for index in indexes]}),
+                "Gemini returned invalid page numbering or order. The result was rejected.",
+            )
+            for indexes in ([0, 0], [1, 0], [0, 2], [1, 2])
+        ],
     ],
 )
-async def test_rejects_invalid_or_unordered_provider_response(response: str | None) -> None:
+async def test_explains_rejected_provider_response(response: str | None, message: str) -> None:
     client, _models = client_with(response)
 
     with pytest.raises(PermanentProcessingError) as caught:
         await GeminiPdfParser(client=client, model="test-model").parse(PDF_BYTES)
 
     assert caught.value.code == "invalid_provider_response"
-    assert str(caught.value) == "Gemini returned an invalid page structure."
+    assert str(caught.value) == message
+
+
+def sdk_candidate(text: str | None, reason: types.FinishReason | None) -> types.Candidate:
+    content = None if text is None else types.Content(parts=[types.Part.from_text(text=text)])
+    return types.Candidate(content=content, finish_reason=reason)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        None,
+        "",
+        " \n\t",
+        '{"pages":[',
+        '{"pages":[{"index":0,"markdown":"A"},{"index":1,"markdown":"B"}]}',
+    ],
+)
+async def test_confirmed_output_limit_takes_precedence_over_text(text: str | None) -> None:
+    models = FakeModels(
+        types.GenerateContentResponse(
+            candidates=[sdk_candidate(text, types.FinishReason.MAX_TOKENS)]
+        )
+    )
+    parser = GeminiPdfParser(client=FakeClient(FakeAsyncClient(models)), model="test-model")
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await parser.parse(PDF_BYTES)
+
+    assert caught.value.code == "invalid_provider_response"
+    assert str(caught.value) == (
+        "Gemini reached its response limit before a complete extraction could be confirmed. "
+        "Try a smaller PDF."
+    )
+    assert len(models.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", [None, "UNRECOGNIZED_METADATA_CANARY"])
+async def test_absent_or_unrecognized_metadata_does_not_invent_output_limit(
+    reason: str | None,
+) -> None:
+    # Bypass enum parsing to exercise a forward-compatible unknown provider value.
+    candidate = types.Candidate.model_construct(finish_reason=reason)
+    models = FakeModels(FakeResponse("not json", candidates=[candidate]))
+
+    with pytest.raises(PermanentProcessingError) as caught:
+        await GeminiPdfParser(client=FakeClient(FakeAsyncClient(models)), model="test-model").parse(
+            PDF_BYTES
+        )
+
+    assert str(caught.value) == "Gemini returned malformed JSON for the extracted pages."
+
+
+@pytest.mark.asyncio
+async def test_unused_candidate_limit_does_not_override_consumed_candidate() -> None:
+    text = '{"pages":[{"index":0,"markdown":"A"},{"index":1,"markdown":"B"}]}'
+    models = FakeModels(
+        types.GenerateContentResponse(
+            candidates=[
+                sdk_candidate(text, types.FinishReason.STOP),
+                sdk_candidate("UNUSED_RESPONSE_CANARY", types.FinishReason.MAX_TOKENS),
+            ]
+        )
+    )
+
+    pages = await GeminiPdfParser(
+        client=FakeClient(FakeAsyncClient(models)), model="test-model"
+    ).parse(PDF_BYTES)
+
+    assert [page.markdown for page in pages] == ["A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_complete_many_page_response_has_no_new_validation_cutoff() -> None:
+    text = json.dumps(
+        {"pages": [{"index": index, "markdown": f"Synthetic page {index}"} for index in range(240)]}
+    )
+    models = FakeModels(
+        types.GenerateContentResponse(candidates=[sdk_candidate(text, types.FinishReason.STOP)])
+    )
+
+    pages = await GeminiPdfParser(
+        client=FakeClient(FakeAsyncClient(models)), model="test-model"
+    ).parse(pdf_bytes(240))
+
+    assert [page.index for page in pages] == list(range(240))
+    assert pages[-1].markdown == "Synthetic page 239"
+    assert len(models.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidates",
+    [None, [], [types.Candidate.model_construct(finish_reason="UNRECOGNIZED_METADATA_CANARY")]],
+)
+async def test_complete_response_without_known_finish_reason_still_succeeds(
+    candidates: list[types.Candidate] | None,
+) -> None:
+    models = FakeModels(
+        FakeResponse(
+            '{"pages":[{"index":0,"markdown":"A"},{"index":1,"markdown":""}]}',
+            candidates=candidates,
+        )
+    )
+
+    pages = await GeminiPdfParser(
+        client=FakeClient(FakeAsyncClient(models)), model="test-model"
+    ).parse(PDF_BYTES)
+
+    assert [page.markdown for page in pages] == ["A", ""]
 
 
 @pytest.mark.asyncio
