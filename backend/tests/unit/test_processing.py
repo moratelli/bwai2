@@ -195,9 +195,10 @@ async def test_persists_safe_permanent_parser_failure_and_deletes_source() -> No
 
 
 @pytest.mark.asyncio
-async def test_persists_safe_permanent_summary_failure() -> None:
+@pytest.mark.parametrize("code", ["empty_extraction", "summary_too_large"])
+async def test_persists_safe_permanent_summary_failure(code: str) -> None:
     repository = FakeRepository(record())
-    summarizer = FakeSummarizer(PermanentProcessingError("empty_extraction", "Use OCR."))
+    summarizer = FakeSummarizer(PermanentProcessingError(code, "Safe summary failure."))
 
     outcome = await service(
         repository,
@@ -206,7 +207,7 @@ async def test_persists_safe_permanent_summary_failure() -> None:
     ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
     assert outcome is ProcessingOutcome.FAILED
-    assert repository.events == ["fail:empty_extraction:Use OCR."]
+    assert repository.events == [f"fail:{code}:Safe summary failure."]
     assert repository.source is None
     assert summarizer.calls == [PAGES]
 

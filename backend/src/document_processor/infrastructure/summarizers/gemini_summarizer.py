@@ -70,47 +70,91 @@ class GeminiSummarizer:
         if len(chunks) == 1:
             return await self._request(
                 "Summarize this document as concise, accurate Markdown. "
-                "Retain its key facts and conclusions.\n\n"
-                f"{chunks[0]}"
+                "Retain its key facts and conclusions.",
+                chunks[0],
             )
-
         partials = [
             await self._request(
                 "Summarize this section as concise, accurate Markdown. "
-                "Retain facts needed for a later whole-document synthesis.\n\n"
-                f"{chunk}"
+                "Retain facts needed for a later whole-document synthesis.",
+                chunk,
             )
             for chunk in chunks
         ]
-        marked_partials = "\n\n".join(
+        blocks = self._section_blocks(partials)
+        for reduction in range(4):
+            groups = self._pack_blocks(blocks)
+            if len(groups) == 1:
+                return await self._request(
+                    "Synthesize these section summaries into one coherent Markdown summary. "
+                    "Remove repetition without dropping key facts.",
+                    groups[0],
+                )
+            if reduction == 3:
+                break
+            previous_size = self._rendered_size(blocks)
+            partials = [
+                await self._request(
+                    "Compress these section summaries into concise, accurate Markdown. "
+                    "Preserve the key facts while reducing their length.",
+                    group,
+                )
+                for group in groups
+            ]
+            blocks = self._section_blocks(partials)
+            if self._rendered_size(blocks) >= previous_size:
+                raise self._too_large()
+        raise self._too_large()
+
+    def _page_chunks(self, pages: Sequence[PageContent]) -> tuple[str, ...]:
+        return self._pack_blocks(
+            [f"## Page {page.index + 1}\n\n{page.markdown.strip()}" for page in pages]
+        )
+
+    def _pack_blocks(self, blocks: Sequence[str]) -> tuple[str, ...]:
+        chunks: list[str] = []
+        current = ""
+        for block in blocks:
+            if len(block) > self._chunk_size:
+                if current:
+                    chunks.append(current)
+                for offset in range(0, len(block), self._chunk_size):
+                    piece = block[offset : offset + self._chunk_size]
+                    if offset + self._chunk_size < len(block):
+                        chunks.append(piece)
+                    else:
+                        current = piece
+            elif current and len(current) + 2 + len(block) > self._chunk_size:
+                chunks.append(current)
+                current = block
+            else:
+                current = f"{current}\n\n{block}" if current else block
+        if current:
+            chunks.append(current)
+        return tuple(chunks)
+
+    @staticmethod
+    def _section_blocks(partials: Sequence[str]) -> tuple[str, ...]:
+        return tuple(
             f"## Section summary {index}\n\n{partial}"
             for index, partial in enumerate(partials, start=1)
         )
-        return await self._request(
-            "Synthesize these section summaries into one coherent Markdown summary. "
-            "Remove repetition without dropping key facts.\n\n"
-            f"{marked_partials}"
+
+    @staticmethod
+    def _rendered_size(blocks: Sequence[str]) -> int:
+        return sum(len(block) for block in blocks) + 2 * max(0, len(blocks) - 1)
+
+    @staticmethod
+    def _too_large() -> PermanentProcessingError:
+        return PermanentProcessingError(
+            "summary_too_large",
+            "The summary could not be reduced within the configured content limit.",
         )
 
-    def _page_chunks(self, pages: Sequence[PageContent]) -> tuple[str, ...]:
-        blocks = [f"## Page {page.index + 1}\n\n{page.markdown.strip()}" for page in pages]
-        chunks: list[str] = []
-        current: list[str] = []
-        current_size = 0
-        for block in blocks:
-            separator_size = 2 if current else 0
-            if current and current_size + separator_size + len(block) > self._chunk_size:
-                chunks.append("\n\n".join(current))
-                current = []
-                current_size = 0
-                separator_size = 0
-            current.append(block)
-            current_size += separator_size + len(block)
-        if current:
-            chunks.append("\n\n".join(current))
-        return tuple(chunks)
-
-    async def _request(self, prompt: str) -> str:
+    async def _request(self, instruction: str, content: str) -> str:
+        if len(content) > self._chunk_size:
+            raise self._too_large()
+        prompt = f"{instruction}\n\n{content}"
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,

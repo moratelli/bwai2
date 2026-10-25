@@ -137,6 +137,8 @@ The Gemini key is a runtime variable. It is not copied into images, exposed to V
 
 `TEST_SUMMARIZER_ENABLED` is different: it exists only so the container smoke test can exercise the queue without spending provider quota. Leave it `false` for normal use. It does not enable Gemini parsing or OCR.
 
+Summary requests enforce the configured character budget on page and section content, including labels and separators. Fixed instructions are outside that budget; this is not a token-limit guarantee. Splitting does not change the extracted pages in a successful result. Oversized section summaries get at most three reduction passes; failure to shrink or fit ends the job with `summary_too_large` rather than sending oversized content or dropping sections.
+
 ## Development checks
 
 Python dependencies and commands run through `uv`; frontend dependencies use the committed npm lockfile.
