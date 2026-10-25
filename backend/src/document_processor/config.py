@@ -27,8 +27,9 @@ class Settings(BaseSettings):
     consumer_group: str = "document-workers"
     worker_concurrency: int = Field(default=2, gt=0)
     worker_max_attempts: int = Field(default=3, gt=0)
-    worker_retry_base_seconds: float = Field(default=1.0, ge=0)
-    worker_retry_jitter_seconds: float = Field(default=0.25, ge=0)
+    worker_retry_base_seconds: float = Field(default=15.0, ge=0, allow_inf_nan=False)
+    worker_retry_max_seconds: float = Field(default=60.0, ge=0, allow_inf_nan=False)
+    worker_retry_jitter_seconds: float = Field(default=5.0, ge=0, allow_inf_nan=False)
     worker_reclaim_idle_ms: int = Field(default=30_000, gt=0)
     worker_read_block_ms: int = Field(default=5_000, gt=0)
     worker_batch_size: int = Field(default=1, gt=0)

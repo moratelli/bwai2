@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -121,6 +122,7 @@ class DocumentWorker:
         token_factory: Callable[[], str] = lambda: str(uuid4()),
         clock: Callable[[], datetime] | None = None,
         provider_gate: ProviderRequestGate | None = None,
+        retry_max_seconds: float = 60,
     ) -> None:
         if max_attempts <= 0:
             raise ValueError("max_attempts must be positive")
@@ -131,6 +133,7 @@ class DocumentWorker:
         self._consumer_name = consumer_name
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
+        self._retry_max_seconds = retry_max_seconds
         self._retry_jitter_seconds = retry_jitter_seconds
         self._reclaim_idle_ms = reclaim_idle_ms
         self._read_block_ms = read_block_ms
@@ -311,6 +314,24 @@ class DocumentWorker:
                     attempt=attempt,
                 )
             except (RetryableProcessingError, InfrastructureUnavailableError) as error:
+                delay = self._retry_delay(attempt, error)
+                info = error.provider_info if isinstance(error, RetryableProcessingError) else None
+                if info is not None and self._provider_gate is not None:
+                    try:
+                        schedule = await self._provider_gate.cool_down(delay)
+                        delay = schedule.delay_seconds
+                    except InfrastructureUnavailableError:
+                        _LOGGER.warning(
+                            "document_cooldown_unavailable",
+                            extra={
+                                "event": "document_cooldown_unavailable",
+                                "document_id": str(message.document_id),
+                                "message_id": message.message_id,
+                                "attempt": attempt,
+                                "error_code": "infrastructure_unavailable",
+                            },
+                        )
+                        return
                 if attempt >= self._max_attempts:
                     await self._publish_failure(
                         message,
@@ -320,8 +341,6 @@ class DocumentWorker:
                         error_message=f"Processing failed after {self._max_attempts} attempts.",
                     )
                     return
-                delay = self._retry_base_seconds * (2 ** (attempt - 1))
-                delay += self._random() * self._retry_jitter_seconds
                 _LOGGER.warning(
                     "document_retry_scheduled",
                     extra={
@@ -331,6 +350,10 @@ class DocumentWorker:
                         "attempt": attempt,
                         "error_code": error.code,
                         "delay_seconds": delay,
+                        "provider": "gemini" if info is not None else None,
+                        "provider_category": info.category if info is not None else None,
+                        "provider_stage": info.stage if info is not None else None,
+                        "http_status": info.http_status if info is not None else None,
                     },
                 )
                 await self._sleep(delay)
@@ -375,6 +398,18 @@ class DocumentWorker:
                 }:
                     await self._queue.acknowledge(message.message_id)
                 return
+
+    def _retry_delay(
+        self, attempt: int, error: RetryableProcessingError | InfrastructureUnavailableError
+    ) -> float:
+        try:
+            exponential = math.ldexp(self._retry_base_seconds, attempt - 1)
+        except OverflowError:
+            exponential = self._retry_max_seconds
+        hint = error.retry_after_seconds if isinstance(error, RetryableProcessingError) else None
+        return max(min(exponential, self._retry_max_seconds), hint or 0) + (
+            self._random() * self._retry_jitter_seconds
+        )
 
     async def _publish_failure(
         self,

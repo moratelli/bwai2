@@ -126,6 +126,7 @@ def build_worker(
         provider_gate=provider_gate,
         max_attempts=settings.worker_max_attempts,
         retry_base_seconds=settings.worker_retry_base_seconds,
+        retry_max_seconds=settings.worker_retry_max_seconds,
         retry_jitter_seconds=settings.worker_retry_jitter_seconds,
         reclaim_idle_ms=settings.worker_reclaim_idle_ms,
         read_block_ms=settings.worker_read_block_ms,

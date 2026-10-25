@@ -3,8 +3,9 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Protocol, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from redis.asyncio import Redis
@@ -12,9 +13,27 @@ from redis.asyncio.client import Pipeline
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import WatchError
 
-from document_processor.domain.errors import InfrastructureUnavailableError
+from document_processor.domain.errors import (
+    InfrastructureUnavailableError,
+    RetryableProcessingError,
+)
+from document_processor.domain.models import (
+    DocumentStatus,
+    NewDocument,
+    PageContent,
+    ParserKind,
+    StateTransition,
+)
+from document_processor.domain.provider import ProviderCategory, ProviderFailure
 from document_processor.infrastructure.gemini_rate_gate import RedisGeminiRateGate
-from document_processor.infrastructure.redis_repository import AsyncRedisClient
+from document_processor.infrastructure.redis_gateway import RedisSubmissionGateway
+from document_processor.infrastructure.redis_repository import (
+    AsyncRedisClient,
+    RedisDocumentRepository,
+)
+from document_processor.infrastructure.redis_streams import RedisStreamQueue
+from document_processor.services.processing import ProcessingOutcome
+from document_processor.worker import DocumentWorker
 
 
 class ServerTime(Protocol):
@@ -285,3 +304,110 @@ def test_invalid_budget_rejected(rpm: int) -> None:
 def test_invalid_scope_rejected(scope: str) -> None:
     with pytest.raises(ValueError):
         RedisGeminiRateGate(cast(Redis, None), scope=scope, model="test", requests_per_minute=12)
+
+
+@pytest.mark.parametrize("status,category", [(429, "rate_limited"), (503, "unavailable")])
+async def test_worker_terminal_failure_cools_down_another_worker(
+    harness: Harness,
+    status: int,
+    category: ProviderCategory,
+) -> None:
+    repository = RedisDocumentRepository(harness.redis)
+    stream = "test-cooldown:" + harness.scope
+    queue = RedisStreamQueue(harness.redis, stream_name=stream, group_name="workers")
+    now = datetime.now(UTC)
+    documents = [
+        NewDocument(
+            id=uuid4(),
+            filename="synthetic.pdf",
+            parser=ParserKind.PYPDF,
+            status=DocumentStatus.QUEUED,
+            content=b"%PDF-synthetic",
+            created_at=now,
+        )
+        for _ in range(2)
+    ]
+    calls: list[tuple[UUID, int]] = []
+
+    class Processor:
+        def __init__(self, gate: RedisGeminiRateGate, fail: bool) -> None:
+            self.gate, self.fail = gate, fail
+
+        async def process(
+            self, document_id: UUID, *, token: str, attempt: int
+        ) -> ProcessingOutcome:
+            await self.gate.acquire()
+            calls.append((document_id, harness.clock.now_ms))
+            if self.fail:
+                raise RetryableProcessingError(
+                    "gemini_temporarily_unavailable",
+                    "Safe provider failure.",
+                    provider_info=ProviderFailure(category, "summarization", status),
+                    retry_after_seconds=60,
+                )
+            assert (
+                await repository.complete(
+                    document_id,
+                    token=token,
+                    pages=[PageContent(0, "synthetic")],
+                    summary="synthetic",
+                    completed_at=now,
+                    attempts=attempt,
+                )
+                is StateTransition.APPLIED
+            )
+            return ProcessingOutcome.COMPLETED
+
+    def worker(fail: bool) -> DocumentWorker:
+        gate = harness.gate()
+        return DocumentWorker(
+            queue=queue,
+            repository=repository,
+            processor=Processor(gate, fail),
+            consumer_name="first" if fail else "second",
+            max_attempts=1,
+            retry_base_seconds=15,
+            retry_jitter_seconds=0,
+            reclaim_idle_ms=30000,
+            read_block_ms=1,
+            batch_size=1,
+            lock_ttl_seconds=60,
+            random=lambda: 0,
+            provider_gate=gate,
+            clock=lambda: now,
+        )
+
+    second: asyncio.Task[int] | None = None
+    try:
+        await RedisSubmissionGateway(
+            harness.redis, ttl_seconds=120, stream_name=stream
+        ).create_batch(documents)
+        assert await worker(True).run_once() == 1
+        failed = await repository.get(documents[0].id)
+        assert failed is not None and failed.status is DocumentStatus.FAILED
+        second = asyncio.create_task(worker(False).run_once())
+        sleeping = await harness.clock.next_sleep()
+        assert len(calls) == 1
+        assert harness.clock.delays[-1] == 60
+        harness.clock.now_ms += 59999
+        sleeping.set_result(None)
+        sleeping = await harness.clock.next_sleep()
+        assert len(calls) == 1 and not second.done()
+        harness.clock.now_ms += 1
+        sleeping.set_result(None)
+        assert await asyncio.wait_for(second, timeout=2) == 1
+        assert calls[1][1] - calls[0][1] == 60000
+    finally:
+        if second is not None:
+            second.cancel()
+            await asyncio.gather(second, return_exceptions=True)
+        keys = [stream]
+        for document in documents:
+            keys.extend(
+                [
+                    repository.document_key(document.id),
+                    repository.source_key(document.id),
+                    repository.lock_key(document.id),
+                ]
+            )
+        await harness.redis.delete(*keys)

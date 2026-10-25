@@ -48,6 +48,8 @@ Every production extraction, summary chunk, reduction, and synthesis request pas
 
 Cooperating workers must share Redis, model, `GEMINI_RATE_LIMIT_SCOPE`, and the configured RPM. A conflicting budget or uncertain Redis operation fails closed. Waiting clients recheck the gate instead of reserving future slots, and restarts do not reset it. When changing a scope's budget, stop its workers and allow its admission/cooldown state to expire before starting the matching configuration. Never change scopes to evade an active cooldown.
 
+A confirmed retryable provider failure extends a shared cooldown, even when that document has exhausted its attempts. Backoff starts at 15 seconds, doubles by admitted attempt, and caps its exponential component at 60 seconds. The worker adds up to five seconds of jitter. Numeric or HTTP-date `Retry-After` and `google.rpc.RetryInfo` delays up to one day can extend the wait; the exponential cap never shortens a supported hint. Malformed, negative, non-finite, or longer hints use fallback backoff. Already-sent requests can finish; later admissions wait and recheck.
+
 This is application admission pacing, not a guarantee about request arrival times or provider availability. Other clients and separate Redis deployments can still consume the project's quota. The app does not proactively enforce input-token or daily quotas. It records returned token usage when available; missing usage is unknown, not zero.
 
 ### Why Mistral OCR was removed
@@ -149,7 +151,7 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
   "attempt": 1,
   "outcome": null,
   "error_code": "gemini_temporarily_unavailable",
-  "delay_seconds": 2.0,
+  "delay_seconds": 15.0,
   "provider": null,
   "provider_category": null,
   "provider_stage": null,
@@ -178,6 +180,9 @@ Worker logs contain one JSON record per line. Correlation uses the last confirme
 | `MAX_FILE_SIZE_BYTES` | `20971520` | Per-file limit, 20 MiB by default |
 | `WORKER_CONCURRENCY` | `2` | Consumers in the worker process |
 | `WORKER_MAX_ATTEMPTS` | `3` | Retry ceiling for temporary failures |
+| `WORKER_RETRY_BASE_SECONDS` | `15` | Initial exponential backoff |
+| `WORKER_RETRY_MAX_SECONDS` | `60` | Exponential component cap; does not cap supported provider hints |
+| `WORKER_RETRY_JITTER_SECONDS` | `5` | Maximum additive jitter |
 
 The Gemini key is a runtime variable. It is not copied into images, exposed to Vite, or included in tracked files.
 
