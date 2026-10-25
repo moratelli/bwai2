@@ -18,6 +18,13 @@ class DocumentStatus(StrEnum):
     FAILED = "failed"
 
 
+class StateTransition(StrEnum):
+    APPLIED = "applied"
+    NOT_FOUND = "not_found"
+    ALREADY_TERMINAL = "already_terminal"
+    LOST_OWNERSHIP = "lost_ownership"
+
+
 @dataclass(frozen=True, slots=True)
 class UploadCandidate:
     filename: str

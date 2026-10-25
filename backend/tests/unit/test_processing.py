@@ -13,6 +13,7 @@ from document_processor.domain.models import (
     DocumentStatus,
     PageContent,
     ParserKind,
+    StateTransition,
 )
 from document_processor.services.processing import ProcessingOutcome, ProcessingService
 
@@ -20,6 +21,7 @@ DOCUMENT_ID = UUID("00000000-0000-4000-8000-000000000001")
 NOW = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
 PDF_BYTES = b"%PDF-1.7\ncontent"
 PAGES = (PageContent(index=0, markdown="Text"),)
+OWNER = "test-owner"
 
 
 @dataclass
@@ -40,30 +42,34 @@ class FakeRepository:
         self,
         document_id: UUID,
         *,
+        token: str,
         attempt: int,
         updated_at: datetime,
-    ) -> bool:
+    ) -> StateTransition:
+        assert token == OWNER
         assert document_id == DOCUMENT_ID
         self.events.append("processing")
         if self.record is None:
-            return False
+            return StateTransition.NOT_FOUND
         self.record = replace(
             self.record,
             status=DocumentStatus.PROCESSING,
             attempts=attempt,
             updated_at=updated_at,
         )
-        return True
+        return StateTransition.APPLIED
 
     async def complete(
         self,
         document_id: UUID,
         *,
+        token: str,
         pages: Sequence[PageContent],
         summary: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None:
+    ) -> StateTransition:
+        assert token == OWNER
         assert document_id == DOCUMENT_ID
         self.events.append("complete")
         assert self.record is not None
@@ -77,16 +83,19 @@ class FakeRepository:
             completed_at=completed_at,
         )
         self.source = None
+        return StateTransition.APPLIED
 
     async def fail(
         self,
         document_id: UUID,
         *,
+        token: str,
         error_code: str,
         error_message: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None:
+    ) -> StateTransition:
+        assert token == OWNER
         assert document_id == DOCUMENT_ID
         self.events.append(f"fail:{error_code}:{error_message}")
         assert self.record is not None
@@ -100,6 +109,7 @@ class FakeRepository:
             completed_at=completed_at,
         )
         self.source = None
+        return StateTransition.APPLIED
 
 
 @dataclass
@@ -166,7 +176,9 @@ async def test_dispatches_selected_parser_and_publishes_one_complete_result(
     parsers = {kind: FakeParser() for kind in ParserKind}
     summarizer = FakeSummarizer()
 
-    outcome = await service(repository, parsers, summarizer).process(DOCUMENT_ID, attempt=1)
+    outcome = await service(repository, parsers, summarizer).process(
+        DOCUMENT_ID, token=OWNER, attempt=1
+    )
 
     assert outcome is ProcessingOutcome.COMPLETED
     assert repository.events == ["processing", "complete"]
@@ -191,7 +203,7 @@ async def test_persists_safe_permanent_parser_failure_and_deletes_source() -> No
         repository,
         {ParserKind.PYPDF: parser},
         summarizer,
-    ).process(DOCUMENT_ID, attempt=2)
+    ).process(DOCUMENT_ID, token=OWNER, attempt=2)
 
     assert outcome is ProcessingOutcome.FAILED
     assert repository.events == ["processing", "fail:invalid_pdf:Safe failure."]
@@ -211,7 +223,7 @@ async def test_persists_safe_permanent_summary_failure() -> None:
         repository,
         {ParserKind.PYPDF: FakeParser()},
         summarizer,
-    ).process(DOCUMENT_ID, attempt=1)
+    ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
     assert outcome is ProcessingOutcome.FAILED
     assert repository.events == ["processing", "fail:empty_extraction:Use OCR."]
@@ -229,7 +241,7 @@ async def test_propagates_retryable_failure_without_publishing_terminal_state() 
             repository,
             {ParserKind.PYPDF: parser},
             FakeSummarizer(),
-        ).process(DOCUMENT_ID, attempt=1)
+        ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
     assert repository.events == ["processing"]
     assert repository.record is not None
@@ -247,7 +259,7 @@ async def test_skips_terminal_redelivery_without_provider_calls() -> None:
         repository,
         {ParserKind.PYPDF: parser},
         summarizer,
-    ).process(DOCUMENT_ID, attempt=2)
+    ).process(DOCUMENT_ID, token=OWNER, attempt=2)
 
     assert outcome is ProcessingOutcome.ALREADY_TERMINAL
     assert repository.events == []
@@ -263,7 +275,7 @@ async def test_missing_source_becomes_safe_terminal_failure() -> None:
         repository,
         {ParserKind.PYPDF: FakeParser()},
         FakeSummarizer(),
-    ).process(DOCUMENT_ID, attempt=1)
+    ).process(DOCUMENT_ID, token=OWNER, attempt=1)
 
     assert outcome is ProcessingOutcome.FAILED
     assert repository.events == [

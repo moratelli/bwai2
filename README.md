@@ -108,6 +108,10 @@ Workers use the `document-workers` consumer group. They reclaim stale pending me
 
 `WORKER_CONCURRENCY` controls the number of consumers inside the worker container. The default is two.
 
+State changes check the current lease owner and the live document record in the same Redis transaction. Terminal writes also check the processing attempt. A stale worker cannot overwrite a result, delete another worker's source, or recreate an expired record. Processing does not extend the original retention deadline.
+
+When upgrading from the earlier worker implementation, stop all old workers before starting the new version. Mixed worker versions are unsafe because the old code can still write without these guards. Keep Redis data and let pending jobs recover; do not delete locks to speed up a restart.
+
 ## Configuration
 
 `.env.example` contains every setting used by Compose. The main ones are:
@@ -137,6 +141,8 @@ make check
 ```
 
 `make check` verifies generated API drift, Ruff formatting and linting, strict mypy, Oxfmt, Oxlint, strict application and Playwright TypeScript, backend and frontend tests, the Python package build, and the Vite production build.
+
+CI provides a disposable Redis 7 service for the integration tests. Locally, set `TEST_REDIS_URL` to a disposable Redis 7 instance before running the checks to include real transaction, expiry, and ownership tests. The submission test clears the selected database: never use an application database. Without that variable, real-Redis cases explicitly skip; a configured but unreachable instance fails the run.
 
 If the FastAPI schema changes, regenerate and verify the frontend contract:
 

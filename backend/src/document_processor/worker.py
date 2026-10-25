@@ -12,6 +12,7 @@ from document_processor.domain.errors import (
     PermanentProcessingError,
     RetryableProcessingError,
 )
+from document_processor.domain.models import StateTransition
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 
@@ -55,11 +56,12 @@ class WorkerRepository(Protocol):
         self,
         document_id: UUID,
         *,
+        token: str,
         error_code: str,
         error_message: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None: ...
+    ) -> StateTransition: ...
 
 
 class WorkerProcessor(Protocol):
@@ -67,6 +69,7 @@ class WorkerProcessor(Protocol):
         self,
         document_id: UUID,
         *,
+        token: str,
         attempt: int,
     ) -> ProcessingOutcome: ...
 
@@ -168,38 +171,28 @@ class DocumentWorker:
             },
         )
         try:
-            await self._process_with_retries(message)
+            await self._process_with_retries(message, token)
         finally:
             await asyncio.shield(self._repository.release_lock(message.document_id, token))
 
-    async def _process_with_retries(self, message: StreamMessage) -> None:
+    async def _process_with_retries(self, message: StreamMessage, token: str) -> None:
         attempt = min(max(message.delivery_count, 1), self._max_attempts)
         while True:
             try:
                 outcome = await self._processor.process(
                     message.document_id,
+                    token=token,
                     attempt=attempt,
                 )
             except (RetryableProcessingError, InfrastructureUnavailableError) as error:
                 if attempt >= self._max_attempts:
-                    await self._repository.fail(
-                        message.document_id,
+                    await self._publish_failure(
+                        message,
+                        token,
+                        attempt,
                         error_code="retry_exhausted",
-                        error_message=(f"Processing failed after {self._max_attempts} attempts."),
-                        completed_at=self._clock(),
-                        attempts=attempt,
+                        error_message=f"Processing failed after {self._max_attempts} attempts.",
                     )
-                    _LOGGER.error(
-                        "document_processing_failed",
-                        extra={
-                            "event": "document_processing_failed",
-                            "document_id": str(message.document_id),
-                            "message_id": message.message_id,
-                            "attempt": attempt,
-                            "error_code": "retry_exhausted",
-                        },
-                    )
-                    await self._queue.acknowledge(message.message_id)
                     return
                 delay = self._retry_base_seconds * (2 ** (attempt - 1))
                 delay += self._random() * self._retry_jitter_seconds
@@ -217,35 +210,81 @@ class DocumentWorker:
                 await self._sleep(delay)
                 attempt += 1
             except PermanentProcessingError as error:
-                await self._repository.fail(
-                    message.document_id,
+                await self._publish_failure(
+                    message,
+                    token,
+                    attempt,
                     error_code=error.code,
                     error_message=str(error),
-                    completed_at=self._clock(),
-                    attempts=attempt,
                 )
-                _LOGGER.warning(
-                    "document_processing_failed",
-                    extra={
-                        "event": "document_processing_failed",
-                        "document_id": str(message.document_id),
-                        "message_id": message.message_id,
-                        "attempt": attempt,
-                        "error_code": error.code,
-                    },
-                )
-                await self._queue.acknowledge(message.message_id)
                 return
             else:
+                event = (
+                    "document_ownership_lost"
+                    if outcome is ProcessingOutcome.LOST_OWNERSHIP
+                    else "document_processing_completed"
+                )
                 _LOGGER.info(
-                    "document_processing_completed",
+                    event,
                     extra={
-                        "event": "document_processing_completed",
+                        "event": event,
                         "document_id": str(message.document_id),
                         "message_id": message.message_id,
                         "attempt": attempt,
                         "outcome": outcome.value,
                     },
                 )
-                await self._queue.acknowledge(message.message_id)
+                if outcome in {
+                    ProcessingOutcome.COMPLETED,
+                    ProcessingOutcome.FAILED,
+                    ProcessingOutcome.ALREADY_TERMINAL,
+                    ProcessingOutcome.NOT_FOUND,
+                }:
+                    await self._queue.acknowledge(message.message_id)
                 return
+
+    async def _publish_failure(
+        self,
+        message: StreamMessage,
+        token: str,
+        attempt: int,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        result = await self._repository.fail(
+            message.document_id,
+            token=token,
+            error_code=error_code,
+            error_message=error_message,
+            completed_at=self._clock(),
+            attempts=attempt,
+        )
+        event = (
+            "document_processing_failed"
+            if result is StateTransition.APPLIED
+            else "document_publication_rejected"
+        )
+        level = (
+            logging.ERROR
+            if result is StateTransition.APPLIED and error_code == "retry_exhausted"
+            else logging.WARNING
+        )
+        _LOGGER.log(
+            level,
+            event,
+            extra={
+                "event": event,
+                "document_id": str(message.document_id),
+                "message_id": message.message_id,
+                "attempt": attempt,
+                "error_code": error_code,
+                "outcome": result.value,
+            },
+        )
+        if result in {
+            StateTransition.APPLIED,
+            StateTransition.NOT_FOUND,
+            StateTransition.ALREADY_TERMINAL,
+        }:
+            await self._queue.acknowledge(message.message_id)

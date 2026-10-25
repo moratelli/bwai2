@@ -96,7 +96,7 @@ async def redis_client() -> AsyncGenerator[Redis]:
         await lifecycle.ping()
     except RedisConnectionError:
         await lifecycle.aclose()
-        pytest.skip("TEST_REDIS_URL is not reachable.")
+        pytest.fail("TEST_REDIS_URL is configured but its disposable Redis is unreachable.")
     await lifecycle.flushdb()
     try:
         yield redis

@@ -121,4 +121,4 @@ Rollback requires stopping the new workers before restoring the old application 
 - `context`: absent. Bounded inventory of the repository, backend, frontend, and scripts found no `CONTEXT.md` or `CONTEXT-MAP.md`.
 - `adr`: absent. The same bounded inventory found no applicable ADR directory or durable-decision record.
 - `architecture`: no designated canonical map. README architecture text is explanatory; `openspec/config.yaml` designates no alternate authority and requires no new map.
-- Change/status: `harden-document-processing` is proposed for Pedro Moratelli's approval after one independent plan review. The request authorizes preparation; runtime application and spec synchronization/archive await approval of this complete change. The existing no-merge instruction remains in force.
+- Change/status: Pedro Moratelli approved the complete 11-task `harden-document-processing` change after the independent plan review. The approval covers continuous implementation, bounded live verification, and synchronization/archive after successful gates and final review. The existing no-merge instruction remains in force.

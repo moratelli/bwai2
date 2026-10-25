@@ -10,6 +10,7 @@ from document_processor.domain.models import (
     NewDocument,
     PageContent,
     ParserKind,
+    StateTransition,
 )
 
 
@@ -36,29 +37,32 @@ class DocumentRepository(DocumentReader, Protocol):
         self,
         document_id: UUID,
         *,
+        token: str,
         attempt: int,
         updated_at: datetime,
-    ) -> bool: ...
+    ) -> StateTransition: ...
 
     async def complete(
         self,
         document_id: UUID,
         *,
+        token: str,
         pages: Sequence[PageContent],
         summary: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None: ...
+    ) -> StateTransition: ...
 
     async def fail(
         self,
         document_id: UUID,
         *,
+        token: str,
         error_code: str,
         error_message: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None: ...
+    ) -> StateTransition: ...
 
 
 class DocumentParser(Protocol):

@@ -15,6 +15,7 @@ from document_processor.domain.errors import (
     PermanentProcessingError,
     RetryableProcessingError,
 )
+from document_processor.domain.models import StateTransition
 from document_processor.infrastructure.redis_streams import StreamMessage
 from document_processor.services.processing import ProcessingOutcome
 from document_processor.worker import DocumentWorker
@@ -88,14 +89,17 @@ class FakeRepository:
         self,
         document_id: UUID,
         *,
+        token: str,
         error_code: str,
         error_message: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None:
+    ) -> StateTransition:
+        assert token == LOCK_OWNER
         assert document_id == DOCUMENT_ID
         assert completed_at == NOW
         self.events.append(f"fail:{error_code}:{error_message}:{attempts}")
+        return StateTransition.APPLIED
 
 
 @dataclass
@@ -104,7 +108,14 @@ class FakeProcessor:
     events: list[str] = field(default_factory=lambda: list[str]())
     attempts: list[int] = field(default_factory=lambda: list[int]())
 
-    async def process(self, document_id: UUID, *, attempt: int) -> ProcessingOutcome:
+    async def process(
+        self,
+        document_id: UUID,
+        *,
+        token: str,
+        attempt: int,
+    ) -> ProcessingOutcome:
+        assert token == LOCK_OWNER
         assert document_id == DOCUMENT_ID
         self.attempts.append(attempt)
         self.events.append(f"process:{attempt}")
@@ -203,7 +214,9 @@ async def test_retries_safe_infrastructure_outage_then_acknowledges_success() ->
 
 
 @pytest.mark.asyncio
-async def test_persists_terminal_failure_before_ack_after_three_attempts() -> None:
+async def test_persists_terminal_failure_before_ack_after_three_attempts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async def no_sleep(_delay: float) -> None:
         return None
 
@@ -216,6 +229,10 @@ async def test_persists_terminal_failure_before_ack_after_three_attempts() -> No
     await worker(queue, repository, processor, sleep=no_sleep).run_once()
 
     assert processor.attempts == [1, 2, 3]
+    assert any(
+        record.getMessage() == "document_processing_failed" and record.levelno == logging.ERROR
+        for record in caplog.records
+    )
     assert repository.events == [
         "lock",
         "fail:retry_exhausted:Processing failed after 3 attempts.:3",
@@ -315,6 +332,28 @@ async def test_emits_structured_content_safe_lifecycle_logs(
     assert sensitive not in rendered
     assert "super-secret" not in rendered
     assert "raw-pdf-text" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome,expected_events",
+    [
+        (ProcessingOutcome.LOST_OWNERSHIP, ["group"]),
+        (ProcessingOutcome.NOT_FOUND, ["group", "ack:1-0"]),
+    ],
+)
+async def test_acknowledgement_distinguishes_lost_ownership_from_absence(
+    outcome: ProcessingOutcome,
+    expected_events: list[str],
+) -> None:
+    queue = FakeQueue(new=(MESSAGE,))
+    repository = FakeRepository()
+    processor = FakeProcessor([outcome])
+
+    await worker(queue, repository, processor).run_once()
+
+    assert queue.events == expected_events
+    assert repository.events == ["lock", "release"]
 
 
 @pytest.mark.asyncio

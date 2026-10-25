@@ -17,12 +17,14 @@ from document_processor.domain.models import (
     NewDocument,
     PageContent,
     ParserKind,
+    StateTransition,
 )
 from document_processor.infrastructure.redis_repository import RedisDocumentRepository
 
 DOCUMENT_ID = UUID("00000000-0000-4000-8000-000000000001")
 CREATED_AT = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 10, 23, 12, 1, tzinfo=UTC)
+OWNER = "repository-test-owner"
 
 
 def queued_document() -> NewDocument:
@@ -50,6 +52,19 @@ async def repository() -> AsyncGenerator[tuple[RedisDocumentRepository, Redis]]:
         yield repo, redis
     finally:
         await redis.aclose()
+
+
+async def begin_processing(repo: RedisDocumentRepository) -> None:
+    assert await repo.acquire_lock(DOCUMENT_ID, OWNER, ttl_seconds=30)
+    assert (
+        await repo.mark_processing(
+            DOCUMENT_ID,
+            token=OWNER,
+            attempt=1,
+            updated_at=COMPLETED_AT,
+        )
+        is StateTransition.APPLIED
+    )
 
 
 @pytest.mark.asyncio
@@ -104,10 +119,16 @@ async def test_marks_document_processing_with_attempt_count() -> None:
     async with repository() as (repo, _redis):
         await repo.save_queued([queued_document()])
 
-        changed = await repo.mark_processing(DOCUMENT_ID, attempt=2, updated_at=COMPLETED_AT)
+        assert await repo.acquire_lock(DOCUMENT_ID, OWNER, ttl_seconds=30)
+        changed = await repo.mark_processing(
+            DOCUMENT_ID,
+            token=OWNER,
+            attempt=2,
+            updated_at=COMPLETED_AT,
+        )
         stored = await repo.get(DOCUMENT_ID)
 
-    assert changed is True
+    assert changed is StateTransition.APPLIED
     assert stored is not None
     assert stored.status is DocumentStatus.PROCESSING
     assert stored.attempts == 2
@@ -119,10 +140,12 @@ async def test_completes_document_and_deletes_source_atomically() -> None:
     pages = (PageContent(index=0, markdown="# First"), PageContent(index=1, markdown="Second"))
     async with repository() as (repo, redis):
         await repo.save_queued([queued_document()])
+        await begin_processing(repo)
         ttl_before = await redis.ttl(repo.document_key(DOCUMENT_ID))
 
         await repo.complete(
             DOCUMENT_ID,
+            token=OWNER,
             pages=pages,
             summary="## Summary",
             completed_at=COMPLETED_AT,
@@ -149,8 +172,10 @@ async def test_fails_document_and_deletes_source_atomically() -> None:
     async with repository() as (repo, _redis):
         await repo.save_queued([queued_document()])
 
+        await begin_processing(repo)
         await repo.fail(
             DOCUMENT_ID,
+            token=OWNER,
             error_code="invalid_pdf",
             error_message="The PDF is corrupt or encrypted.",
             completed_at=COMPLETED_AT,

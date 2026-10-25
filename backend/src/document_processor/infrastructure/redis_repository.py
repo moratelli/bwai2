@@ -16,6 +16,7 @@ from document_processor.domain.models import (
     NewDocument,
     PageContent,
     ParserKind,
+    StateTransition,
 )
 from document_processor.infrastructure.redis_errors import redis_error_boundary
 
@@ -49,6 +50,8 @@ class AsyncRedisPipeline(Protocol):
     async def unwatch(self) -> None: ...
 
     async def get(self, name: str) -> bytes | str | None: ...
+
+    async def hgetall(self, name: str) -> Mapping[bytes | str, bytes | str]: ...
 
     def multi(self) -> None: ...
 
@@ -154,82 +157,117 @@ class RedisDocumentRepository:
         self,
         document_id: UUID,
         *,
+        token: str,
         attempt: int,
         updated_at: datetime,
-    ) -> bool:
-        key = self.document_key(document_id)
-        with redis_error_boundary("Document store"):
-            if not await self._redis.exists(key):
-                return False
-            await self._redis.hset(
-                key,
-                mapping={
-                    "status": DocumentStatus.PROCESSING.value,
-                    "attempts": str(attempt),
-                    "updated_at": updated_at.isoformat(),
-                },
-            )
-        return True
+    ) -> StateTransition:
+        return await self._update_owned(
+            document_id,
+            token,
+            fields={
+                "status": DocumentStatus.PROCESSING.value,
+                "attempts": str(attempt),
+                "updated_at": updated_at.isoformat(),
+            },
+        )
 
     async def complete(
         self,
         document_id: UUID,
         *,
+        token: str,
         pages: Sequence[PageContent],
         summary: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None:
+    ) -> StateTransition:
         encoded_pages = json.dumps(
             [{"index": page.index, "markdown": page.markdown} for page in pages],
             separators=(",", ":"),
         )
-        with redis_error_boundary("Document store"):
-            async with self._redis.pipeline(transaction=True) as pipeline:
-                pipeline.hset(
-                    self.document_key(document_id),
-                    mapping={
-                        "status": DocumentStatus.COMPLETED.value,
-                        "pages": encoded_pages,
-                        "summary": summary,
-                        "attempts": str(attempts),
-                        "updated_at": completed_at.isoformat(),
-                        "completed_at": completed_at.isoformat(),
-                    },
-                )
-                pipeline.hdel(
-                    self.document_key(document_id),
-                    "error_code",
-                    "error_message",
-                )
-                pipeline.delete(self.source_key(document_id))
-                await pipeline.execute()
+        return await self._update_owned(
+            document_id,
+            token,
+            fields={
+                "status": DocumentStatus.COMPLETED.value,
+                "pages": encoded_pages,
+                "summary": summary,
+                "attempts": str(attempts),
+                "updated_at": completed_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+            },
+            terminal_attempt=attempts,
+            clear_fields=("error_code", "error_message"),
+        )
 
     async def fail(
         self,
         document_id: UUID,
         *,
+        token: str,
         error_code: str,
         error_message: str,
         completed_at: datetime,
         attempts: int,
-    ) -> None:
+    ) -> StateTransition:
+        return await self._update_owned(
+            document_id,
+            token,
+            fields={
+                "status": DocumentStatus.FAILED.value,
+                "error_code": error_code,
+                "error_message": error_message,
+                "attempts": str(attempts),
+                "updated_at": completed_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+            },
+            terminal_attempt=attempts,
+            clear_fields=("pages", "summary"),
+        )
+
+    async def _update_owned(
+        self,
+        document_id: UUID,
+        token: str,
+        *,
+        fields: Mapping[str, RedisValue],
+        terminal_attempt: int | None = None,
+        clear_fields: tuple[str, ...] = (),
+    ) -> StateTransition:
+        key, lock = self.document_key(document_id), self.lock_key(document_id)
         with redis_error_boundary("Document store"):
-            async with self._redis.pipeline(transaction=True) as pipeline:
-                pipeline.hset(
-                    self.document_key(document_id),
-                    mapping={
-                        "status": DocumentStatus.FAILED.value,
-                        "error_code": error_code,
-                        "error_message": error_message,
-                        "attempts": str(attempts),
-                        "updated_at": completed_at.isoformat(),
-                        "completed_at": completed_at.isoformat(),
-                    },
-                )
-                pipeline.hdel(self.document_key(document_id), "pages", "summary")
-                pipeline.delete(self.source_key(document_id))
-                await pipeline.execute()
+            while True:
+                async with self._redis.pipeline(transaction=True) as pipeline:
+                    try:
+                        await pipeline.watch(key, lock)
+                        values = self._decode_mapping(await pipeline.hgetall(key))
+                        if not values:
+                            return StateTransition.NOT_FOUND
+                        status = values.get("status")
+                        if status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
+                            return StateTransition.ALREADY_TERMINAL
+                        owner = await pipeline.get(lock)
+                        if owner not in (token, token.encode()) or status not in {
+                            DocumentStatus.QUEUED,
+                            DocumentStatus.PROCESSING,
+                        }:
+                            return StateTransition.LOST_OWNERSHIP
+                        if terminal_attempt is not None and (
+                            status != DocumentStatus.PROCESSING
+                            or terminal_attempt <= 0
+                            or values.get("attempts") != str(terminal_attempt)
+                        ):
+                            return StateTransition.LOST_OWNERSHIP
+                        pipeline.multi()
+                        pipeline.hset(key, mapping=fields)
+                        if clear_fields:
+                            pipeline.hdel(key, *clear_fields)
+                        if terminal_attempt is not None:
+                            pipeline.delete(self.source_key(document_id))
+                        await pipeline.execute()
+                        return StateTransition.APPLIED
+                    except WatchError:
+                        continue
 
     async def acquire_lock(self, document_id: UUID, token: str, *, ttl_seconds: int) -> bool:
         with redis_error_boundary("Document store"):
