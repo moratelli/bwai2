@@ -12,6 +12,17 @@ from document_processor.domain.models import (
     ParserKind,
     StateTransition,
 )
+from document_processor.domain.provider import RetrySchedule
+
+
+class ProviderRequestGate(Protocol):
+    async def acquire(self) -> None:
+        """Wait for a permit; uncertainty never grants admission."""
+        ...
+
+    async def cool_down(self, seconds: float) -> RetrySchedule:
+        """Extend the shared deadline without shortening another worker's wait."""
+        ...
 
 
 class SubmissionGateway(Protocol):
