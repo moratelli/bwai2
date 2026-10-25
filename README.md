@@ -103,7 +103,7 @@ A processing result can include `retry_wait.until` and `retry_wait.cause`. The t
 
 An exhausted result keeps `error.code: retry_exhausted` and can include the same cause under `error.cause`. Compare its `attempt` with the document's `attempts`: an earlier value is last-confirmed evidence, not a diagnosis of the interrupted final attempt. Permanent document errors keep their existing messages without an unrelated provider cause.
 
-These fields are optional. Legacy results remain valid, resumed attempts omit their old wait, and terminal results have no wait. Submission, readiness, and lookup error envelopes are unchanged.
+These fields are optional. Legacy results remain valid, resumed attempts omit their old wait, and terminal results have no wait. The browser accepts absent or null metadata; malformed metadata triggers its normal polling-error handling rather than becoming provider evidence. Submission, readiness, and lookup error envelopes are unchanged.
 
 The Results summary counts completed, failed, active, and unavailable documents currently shown, including earlier submissions on that page. Queued jobs and scheduled retries remain active. Temporary polling errors preserve the cards and counts. Retry cards show a fixed not-before timestamp rather than a countdown or a promise of immediate processing. The scripted `retry-feedback.e2e.ts` browser scenario verifies this presentation with intercepted synthetic responses; it does not test live Gemini availability.
 

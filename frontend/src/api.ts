@@ -118,6 +118,7 @@ function parseDocument(value: unknown): DocumentResource {
   if (status === "queued") return { ...base, status };
   if (status === "processing") {
     const retry_wait = parseRetryWait(item.retry_wait, base.attempts);
+    if (item.retry_wait != null && !retry_wait) invalidResponse();
     return { ...base, status, ...(retry_wait ? { retry_wait } : {}) };
   }
   const completed_at = string(item, "completed_at");
@@ -126,6 +127,7 @@ function parseDocument(value: unknown): DocumentResource {
     const code = string(error, "code");
     const cause =
       code === "retry_exhausted" ? parseProviderCause(error.cause, base.attempts) : undefined;
+    if (code === "retry_exhausted" && error.cause != null && !cause) invalidResponse();
     return {
       ...base,
       status,

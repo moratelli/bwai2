@@ -57,8 +57,6 @@ describe("optional provider result metadata", () => {
   });
 
   it.each([
-    undefined,
-    null,
     "PRIVATE_CANARY",
     [],
     {},
@@ -71,23 +69,35 @@ describe("optional provider result metadata", () => {
     { ...cause, attempt: 4 },
     { ...cause, http_status: 503 },
     { ...cause, http_status: "429" },
-  ])("omits untrusted evidence without losing the document: %j", async (detail) => {
-    const result = await parse({ ...base, retry_wait: { until, cause: detail } });
-    expect(result).toEqual(base);
-    const terminal = await parse(failed(detail));
-    expect(terminal).not.toHaveProperty("error.cause");
-    expect(JSON.stringify(terminal)).not.toContain("PRIVATE_CANARY");
+  ])("rejects malformed provider evidence with a safe error: %j", async (detail) => {
+    await expect(parse({ ...base, retry_wait: { until, cause: detail } })).rejects.toThrow(
+      "The server returned an invalid response.",
+    );
+    await expect(parse(failed(detail))).rejects.toThrow("The server returned an invalid response.");
   });
 
+  it.each([undefined, null])(
+    "accepts an absent cause, but not an incomplete wait: %j",
+    async (detail) => {
+      expect(await parse(failed(detail))).not.toHaveProperty("error.cause");
+      await expect(parse({ ...base, retry_wait: { until, cause: detail } })).rejects.toThrow(
+        "The server returned an invalid response.",
+      );
+    },
+  );
+
   it.each([
-    null,
+    "PRIVATE_CANARY",
+    [],
     {},
     { until: "invalid", cause },
     { until: "2026-10-25T18:01:00", cause },
     { until: "2026-02-30T18:01:00Z", cause },
     { until, cause: { ...cause, attempt: 2 } },
-  ])("ignores invalid waiting metadata: %j", async (retry_wait) => {
-    expect(await parse({ ...base, retry_wait })).toEqual(base);
+  ])("rejects malformed waiting metadata: %j", async (retry_wait) => {
+    await expect(parse({ ...base, retry_wait })).rejects.toThrow(
+      "The server returned an invalid response.",
+    );
   });
 
   it("accepts a legacy response and clears waiting on resumed or terminal results", async () => {
